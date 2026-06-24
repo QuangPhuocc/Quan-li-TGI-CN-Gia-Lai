@@ -28,6 +28,7 @@
     "react-dom": "^19.0.1",
     "react-router-dom": "^7.18.0",
     "recharts": "^3.9.0",
+    "ssh2": "^1.17.0",
     "tailwind-merge": "^3.6.0",
     "vite": "^6.2.3",
     "xlsx": "^0.18.5"
@@ -41,5 +42,18 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
-  }
+  },
+  "description": "<div align=\"center\"> <img width=\"1200\" height=\"475\" alt=\"GHBanner\" src=\"https://ai.google.dev/static/site-assets/images/share-ais-513315318.png\" /> </div>",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QuangPhuocc/Quan-li-TGI-CN-Gia-Lai.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/QuangPhuocc/Quan-li-TGI-CN-Gia-Lai/issues"
+  },
+  "homepage": "https://github.com/QuangPhuocc/Quan-li-TGI-CN-Gia-Lai#readme"
 }
