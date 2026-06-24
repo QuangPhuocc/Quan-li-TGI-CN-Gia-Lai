@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { InsuranceOrder, InsuranceType, User, ChangeLog } from '../types';
-import { Plus, Search, Filter, Download, Upload, Edit, Trash, X, Clock } from 'lucide-react';
+import { Plus, Search, Filter, Download, Upload, Edit, Trash, Trash2, X, Clock } from 'lucide-react';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 
@@ -87,7 +87,7 @@ function formatSerialNumber(val: string): string {
 
 export default function Orders() {
   const { user } = useAuth();
-  const { orders, users, changeLogs, addOrder, updateOrder, importOrders } = useData();
+  const { orders, users, changeLogs, addOrder, updateOrder, importOrders, deleteOrder, deleteOrdersBulk, updateOrdersBulk } = useData();
   
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -98,6 +98,16 @@ export default function Orders() {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<InsuranceOrder | null>(null);
+
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBatchEditOpen, setIsBatchEditOpen] = useState(false);
+
+  const handleBulkDelete = () => {
+    if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn ${selectedIds.length} đơn bảo hiểm đã chọn?`)) {
+      deleteOrdersBulk(selectedIds, user!.fullname);
+      setSelectedIds([]);
+    }
+  };
 
   React.useEffect(() => {
     const mainEl = document.querySelector('main');
@@ -117,6 +127,10 @@ export default function Orders() {
       };
     }
   }, []);
+
+  React.useEffect(() => {
+    setSelectedIds([]);
+  }, [searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider]);
 
   // New Upgrade states
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
@@ -691,11 +705,53 @@ export default function Orders() {
         </div>
       </div>
 
+      {selectedIds.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg flex items-center justify-between flex-shrink-0 transition-all duration-200">
+          <div className="text-xs text-blue-800 font-medium">
+            Đã chọn <span className="font-bold text-blue-900">{selectedIds.length}</span> đơn bảo hiểm
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setIsBatchEditOpen(true)}
+              className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 transition-colors shadow-sm cursor-pointer"
+            >
+              Điều chỉnh hàng loạt
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700 transition-colors shadow-sm cursor-pointer"
+            >
+              Xóa hàng loạt
+            </button>
+            <button
+              onClick={() => setSelectedIds([])}
+              className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              Bỏ chọn
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col min-h-0">
         <div className="overflow-x-auto overflow-y-auto flex-1 w-full">
           <table className="w-full text-left border-collapse text-[11px]">
             <thead className="sticky top-0 z-20 bg-sky-100 shadow-[0_2px_2px_-1px_rgba(0,0,0,0.1)]">
               <tr className="bg-sky-100 border-b border-slate-300 text-[11px] font-bold text-slate-700">
+                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20 w-8">
+                  <input 
+                    type="checkbox" 
+                    checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedIds(filteredOrders.map(o => o.id));
+                      } else {
+                        setSelectedIds([]);
+                      }
+                    }}
+                    className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">STT</th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GCN</th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TÊN KHÁCH HÀNG</th>
@@ -729,6 +785,20 @@ export default function Orders() {
                 const agencyName = foundAgency ? foundAgency.fullname : (order.agency_id || '');
                 return (
                   <tr key={order.id} className="hover:bg-slate-50 transition-colors bg-white">
+                    <td className="px-1 py-1 text-center border-r border-slate-200 w-8">
+                      <input 
+                        type="checkbox" 
+                        checked={selectedIds.includes(order.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedIds(prev => [...prev, order.id]);
+                          } else {
+                            setSelectedIds(prev => prev.filter(id => id !== order.id));
+                          }
+                        }}
+                        className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      />
+                    </td>
                     <td className="px-1 py-1 text-center border-r border-slate-200">{index + 1}</td>
                     <td 
                       className="px-1 py-1 border-r border-slate-200 font-medium text-slate-900 whitespace-nowrap cursor-pointer select-all text-center"
@@ -763,34 +833,44 @@ export default function Orders() {
                     <td className="px-1 py-1 border-r border-slate-200 max-w-[120px] truncate" title={order.notes}>{order.notes || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.provider || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 text-center sticky right-0 bg-white border-l-2 border-slate-200 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.05)] z-10">
-                      <div className="flex items-center justify-center gap-2">
+                      <div className="flex items-center justify-center gap-1.5">
                         <button 
                           onClick={() => setHistoryOrderId(order.id)}
-                          className="p-1 text-slate-400 hover:text-slate-600 transition-colors" title="Lịch sử thay đổi"
+                          className="p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer" title="Lịch sử thay đổi"
                         >
-                          <Clock className="w-4.5 h-4.5" />
+                          <Clock className="w-3.5 h-3.5" />
                         </button>
                         <button 
                           onClick={() => handleOpenModal(order)}
-                          className="p-1 text-slate-400 hover:text-blue-600 transition-colors" title="Sửa"
+                          className="p-1 text-slate-400 hover:text-blue-600 transition-colors cursor-pointer" title="Sửa"
                         >
-                          <Edit className="w-4 h-4" />
+                          <Edit className="w-3.5 h-3.5" />
                         </button>
                         {order.status === 'ACTIVE' ? (
                           <button 
                             onClick={() => handleStatusChange(order.id, 'CANCELLED')}
-                            className="p-1 text-slate-400 hover:text-red-600 transition-colors" title="Hủy đơn"
+                            className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer" title="Hủy thẻ"
                           >
-                            <Trash className="w-4 h-4" />
+                            <Trash className="w-3.5 h-3.5" />
                           </button>
                         ) : (
                           <button 
                             onClick={() => handleStatusChange(order.id, 'ACTIVE')}
-                            className="p-1 text-slate-400 hover:text-emerald-600 transition-colors" title="Khôi phục"
+                            className="p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer" title="Khôi phục"
                           >
-                            <Plus className="w-4 h-4" />
+                            <Plus className="w-3.5 h-3.5" />
                           </button>
                         )}
+                        <button 
+                          onClick={() => {
+                            if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                              deleteOrder(order.id, user!.fullname);
+                            }
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -831,6 +911,19 @@ export default function Orders() {
         <SystemHistoryModal 
           onClose={() => setIsSystemHistoryOpen(false)} 
           changeLogs={changeLogs} 
+        />
+      )}
+
+      {isBatchEditOpen && (
+        <BatchEditModal
+          onClose={() => setIsBatchEditOpen(false)}
+          onSave={(updates: any) => {
+            updateOrdersBulk(selectedIds, updates, user!.fullname);
+            setIsBatchEditOpen(false);
+            setSelectedIds([]);
+          }}
+          users={users}
+          currentUser={user!}
         />
       )}
 
@@ -1418,6 +1511,147 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
             Xác nhận lưu vào hệ thống
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BatchEditModal({ onClose, onSave, users, currentUser }: any) {
+  const [formData, setFormData] = useState({
+    status: 'ACTIVE',
+    payment_status: 'UNPAID',
+    staff_id: '',
+    agency_id: '',
+    provider: '',
+    notes: '',
+  });
+  
+  const [enabledFields, setEnabledFields] = useState<{ [key: string]: boolean }>({
+    status: false,
+    payment_status: false,
+    staff_id: false,
+    agency_id: false,
+    provider: false,
+    notes: false,
+  });
+
+  const handleToggleField = (field: string) => {
+    setEnabledFields(prev => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const handleChange = (e: any) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = (e: any) => {
+    e.preventDefault();
+    const updates: any = {};
+    Object.keys(enabledFields).forEach(key => {
+      if (enabledFields[key]) {
+        updates[key] = formData[key as keyof typeof formData];
+      }
+    });
+    if (Object.keys(updates).length === 0) {
+      alert('Vui lòng chọn ít nhất một trường để điều chỉnh');
+      return;
+    }
+    onSave(updates);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-white flex-shrink-0">
+          <h2 className="text-base font-semibold text-slate-800">Điều chỉnh hàng loạt</h2>
+          <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
+          <p className="text-[11px] text-slate-500 mb-2">Tích chọn ô vuông bên cạnh trường muốn thay đổi, sau đó chọn/nhập giá trị mới.</p>
+          
+          {/* Status */}
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={enabledFields.status} onChange={() => handleToggleField('status')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Trạng thái đơn</label>
+              <select disabled={!enabledFields.status} name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                <option value="ACTIVE">Hiệu lực</option>
+                <option value="CANCELLED">Đã hủy</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Payment */}
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={enabledFields.payment_status} onChange={() => handleToggleField('payment_status')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Thanh toán</label>
+              <select disabled={!enabledFields.payment_status} name="payment_status" value={formData.payment_status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                <option value="UNPAID">Chưa thanh toán</option>
+                <option value="PARTIAL">Thanh toán 1 phần</option>
+                <option value="PAID">Đã thanh toán</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Staff */}
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={enabledFields.staff_id} onChange={() => handleToggleField('staff_id')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Người cấp (Nhân viên)</label>
+              <select disabled={!enabledFields.staff_id} name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                <option value="">Chọn nhân viên...</option>
+                {users.filter((u: any) => u.role === 'STAFF').map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.fullname}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Agency */}
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={enabledFields.agency_id} onChange={() => handleToggleField('agency_id')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Đại lý</label>
+              <select disabled={!enabledFields.agency_id} name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                <option value="">Không có</option>
+                {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.fullname}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Provider */}
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={enabledFields.provider} onChange={() => handleToggleField('provider')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Hãng (Provider)</label>
+              <input disabled={!enabledFields.provider} type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" placeholder="VD: VIỄN ĐÔNG" />
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div className="flex items-center gap-3">
+            <input type="checkbox" checked={enabledFields.notes} onChange={() => handleToggleField('notes')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Ghi chú / Mã GD</label>
+              <textarea disabled={!enabledFields.notes} name="notes" value={formData.notes} onChange={handleChange} rows={2} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t mt-6 flex-shrink-0">
+            <button type="button" onClick={onClose} className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer">
+              Hủy
+            </button>
+            <button type="submit" className="px-6 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 shadow-sm cursor-pointer">
+              Áp dụng
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

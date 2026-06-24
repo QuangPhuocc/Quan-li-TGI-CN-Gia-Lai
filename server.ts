@@ -182,6 +182,62 @@ app.post('/api/orders/bulk', (req, res) => {
   res.json({ success: true, count: newOrders.length });
 });
 
+app.delete('/api/orders/:id', (req, res) => {
+  const { id } = req.params;
+  const orders = readOrders();
+  const filtered = orders.filter(o => o.id !== id);
+  if (filtered.length === orders.length) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  writeJsonAtomic(ORDERS_FILE, filtered);
+  broadcastUpdate();
+  res.json({ success: true });
+});
+
+app.post('/api/orders/bulk-delete', (req, res) => {
+  const { ids, logs } = req.body;
+  const orders = readOrders();
+  const currentLogs = readLogs();
+  
+  const idSet = new Set(ids);
+  const filtered = orders.filter(o => !idSet.has(o.id));
+  const mergedLogs = [...logs, ...currentLogs];
+  
+  writeJsonAtomic(ORDERS_FILE, filtered);
+  writeJsonAtomic(LOGS_FILE, mergedLogs);
+  
+  broadcastUpdate();
+  res.json({ success: true, count: ids.length });
+});
+
+app.post('/api/orders/bulk-update', (req, res) => {
+  const { ids, updates, logs } = req.body;
+  const orders = readOrders();
+  const currentLogs = readLogs();
+  
+  const idSet = new Set(ids);
+  const updated = orders.map(o => {
+    if (idSet.has(o.id)) {
+      const u = { ...o, ...updates, updated_at: new Date().toISOString() };
+      if (updates.effective_date && updates.effective_date !== o.effective_date) {
+        const d = new Date(updates.effective_date);
+        d.setFullYear(d.getFullYear() + 1);
+        u.expiration_date = d.toISOString().split('T')[0];
+      }
+      return u;
+    }
+    return o;
+  });
+  
+  const mergedLogs = [...logs, ...currentLogs];
+  
+  writeJsonAtomic(ORDERS_FILE, updated);
+  writeJsonAtomic(LOGS_FILE, mergedLogs);
+  
+  broadcastUpdate();
+  res.json({ success: true, count: ids.length });
+});
+
 // Users API
 app.get('/api/users', (req, res) => {
   res.json(readUsers());

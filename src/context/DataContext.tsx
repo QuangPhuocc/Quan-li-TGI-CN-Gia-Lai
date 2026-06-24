@@ -8,6 +8,9 @@ interface DataContextType {
   addOrder: (order: InsuranceOrder, userFullname: string) => void;
   updateOrder: (id: string, updates: Partial<InsuranceOrder>, userFullname: string, detailMsg?: string) => void;
   importOrders: (newOrders: InsuranceOrder[], logs: ChangeLog[]) => void;
+  deleteOrder: (id: string, userFullname: string) => Promise<void>;
+  deleteOrdersBulk: (ids: string[], userFullname: string) => Promise<void>;
+  updateOrdersBulk: (ids: string[], updates: Partial<InsuranceOrder>, userFullname: string) => Promise<void>;
   addUser: (user: User) => void;
   updateUser: (id: string, updates: Partial<User>) => void;
   deleteUser: (id: string) => void;
@@ -199,6 +202,103 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const deleteOrder = async (id: string, userFullname: string) => {
+    const deletedOrder = orders.find(o => o.id === id);
+    setOrders(prev => prev.filter(o => o.id !== id));
+    
+    const log: ChangeLog = {
+      id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      order_id: id,
+      serial_number: deletedOrder?.serial_number || id,
+      action: 'CANCEL',
+      user_fullname: userFullname,
+      timestamp: new Date().toISOString(),
+      details: `Xóa vĩnh viễn thẻ bảo hiểm, chủ xe: ${deletedOrder?.vehicle_owner || 'N/A'}`
+    };
+    setChangeLogs(prev => [log, ...prev]);
+
+    try {
+      await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(log)
+      });
+    } catch (err) {
+      console.error('Failed to delete order on server:', err);
+    }
+  };
+
+  const deleteOrdersBulk = async (ids: string[], userFullname: string) => {
+    const idSet = new Set(ids);
+    const deletedOrders = orders.filter(o => idSet.has(o.id));
+    setOrders(prev => prev.filter(o => !idSet.has(o.id)));
+    
+    const logs: ChangeLog[] = deletedOrders.map(o => ({
+      id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      order_id: o.id,
+      serial_number: o.serial_number || o.id,
+      action: 'CANCEL',
+      user_fullname: userFullname,
+      timestamp: new Date().toISOString(),
+      details: `Xóa hàng loạt thẻ bảo hiểm, chủ xe: ${o.vehicle_owner}`
+    }));
+    setChangeLogs(prev => [...logs, ...prev]);
+
+    try {
+      await fetch('/api/orders/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, logs })
+      });
+    } catch (err) {
+      console.error('Failed to bulk delete orders on server:', err);
+    }
+  };
+
+  const updateOrdersBulk = async (ids: string[], updates: Partial<InsuranceOrder>, userFullname: string) => {
+    const idSet = new Set(ids);
+    
+    setOrders(prev => prev.map(o => {
+      if (idSet.has(o.id)) {
+        const u = { ...o, ...updates, updated_at: new Date().toISOString() };
+        if (updates.effective_date && updates.effective_date !== o.effective_date) {
+          const d = new Date(updates.effective_date);
+          d.setFullYear(d.getFullYear() + 1);
+          u.expiration_date = d.toISOString().split('T')[0];
+        }
+        return u;
+      }
+      return o;
+    }));
+    
+    const targetOrders = orders.filter(o => idSet.has(o.id));
+    const details = Object.entries(updates)
+      .map(([key, val]) => `${key}: ${val}`)
+      .join(', ');
+      
+    const logs: ChangeLog[] = targetOrders.map(o => ({
+      id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      order_id: o.id,
+      serial_number: o.serial_number || o.id,
+      action: 'EDIT',
+      user_fullname: userFullname,
+      timestamp: new Date().toISOString(),
+      details: `Điều chỉnh hàng loạt: ${details}`
+    }));
+    setChangeLogs(prev => [...logs, ...prev]);
+
+    try {
+      await fetch('/api/orders/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, updates, logs })
+      });
+    } catch (err) {
+      console.error('Failed to bulk update orders on server:', err);
+    }
+  };
+
   const addUser = async (user: User) => {
     setUsers(prev => [...prev, user]);
     try {
@@ -240,6 +340,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <DataContext.Provider value={{ 
       orders, users, changeLogs, 
       addOrder, updateOrder, importOrders,
+      deleteOrder, deleteOrdersBulk, updateOrdersBulk,
       addUser, updateUser, deleteUser 
     }}>
       {children}
