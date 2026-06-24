@@ -99,6 +99,25 @@ export default function Orders() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<InsuranceOrder | null>(null);
 
+  React.useEffect(() => {
+    const mainEl = document.querySelector('main');
+    if (mainEl) {
+      const origOverflow = mainEl.style.overflow;
+      const origDisplay = mainEl.style.display;
+      const origFlexDir = mainEl.style.flexDirection;
+      
+      mainEl.style.overflow = 'hidden';
+      mainEl.style.display = 'flex';
+      mainEl.style.flexDirection = 'column';
+      
+      return () => {
+        mainEl.style.overflow = origOverflow;
+        mainEl.style.display = origDisplay;
+        mainEl.style.flexDirection = origFlexDir;
+      };
+    }
+  }, []);
+
   // New Upgrade states
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -153,7 +172,7 @@ export default function Orders() {
     
     if (filterStatus !== 'ALL') {
       if (filterStatus === 'NEEDS_PROCESSING') {
-        result = result.filter(o => !o.staff_id || !o.cod_amount || (!o.customer_phone && !o.agency_id));
+        result = result.filter(o => o.status !== 'CANCELLED' && (!o.staff_id || (!o.customer_phone && !o.agency_id) || o.tnds_fee === 0 || o.total_fee === 0));
       } else {
         result = result.filter(o => o.status === filterStatus);
       }
@@ -558,7 +577,7 @@ export default function Orders() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 flex flex-col h-full overflow-hidden">
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -567,7 +586,7 @@ export default function Orders() {
         className="hidden" 
       />
 
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 flex-shrink-0">
         <h1 className="text-2xl font-semibold text-slate-800">Quản lý Đơn Bảo Hiểm</h1>
         <div className="flex flex-wrap items-center gap-3">
           {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
@@ -599,7 +618,7 @@ export default function Orders() {
         </div>
       </div>
 
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-4">
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-4 flex-shrink-0">
         <div className="flex overflow-x-auto pb-2 -mb-2 gap-2 hide-scrollbar">
           {INSURANCE_TABS.map(tab => (
             <button
@@ -672,8 +691,8 @@ export default function Orders() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto w-full">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col min-h-0">
+        <div className="overflow-x-auto overflow-y-auto flex-1 w-full">
           <table className="w-full text-left border-collapse text-[11px]">
             <thead className="sticky top-0 z-20 bg-sky-100 shadow-[0_2px_2px_-1px_rgba(0,0,0,0.1)]">
               <tr className="bg-sky-100 border-b border-slate-300 text-[11px] font-bold text-slate-700">
@@ -725,9 +744,9 @@ export default function Orders() {
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.license_plate || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{format(new Date(order.issue_date), 'dd/MM/yyyy')}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{format(new Date(order.effective_date), 'dd/MM/yyyy')}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.tnds_fee)}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.nn_fee)}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap font-medium">{new Intl.NumberFormat('vi-VN').format(order.total_fee)}</td>
+                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.tnds_fee)}</td>
+                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.nn_fee)}</td>
+                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap font-medium">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.total_fee)}</td>
                     <td className="px-1 py-1 border-r border-slate-200 text-center">
                       <div className="flex flex-col gap-0.5 items-center">
                         <StatusBadge status={order.status} notes={order.notes} order={order} />
@@ -828,44 +847,55 @@ export default function Orders() {
 }
 
 function PaymentBadge({ status }: { status: string }) {
-  if (status === 'PAID') return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-700">Đã TT</span>;
-  if (status === 'PARTIAL') return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-700">TT 1 phần</span>;
-  return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-700">Chưa TT</span>;
+  if (status === 'PAID') return null;
+  if (status === 'PARTIAL') return <span className="text-amber-600 font-semibold text-[11px]">TT 1 phần</span>;
+  return <span className="text-red-600 font-semibold text-[11px]">Chưa TT</span>;
 }
 
 function StatusBadge({ status, notes, order }: { status: string, notes?: string, order?: any }) {
-  const needsProcessing = order && (
-    !order.staff_id || 
-    !order.cod_amount || 
-    (!order.customer_phone && !order.agency_id)
-  );
-  
-  if (status === 'ACTIVE') {
-    if (needsProcessing) {
-      return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border border-amber-200 bg-amber-50 text-amber-700">Cần xử lý</span>;
-    }
-    return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border border-emerald-200 bg-emerald-50 text-emerald-700">Hiệu lực</span>;
-  }
-  if (status === 'NEEDS_PROCESSING') {
-    return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border border-amber-200 bg-amber-50 text-amber-700">Cần xử lý</span>;
-  }
-  
-  // Show detailed cancellation metadata
-  return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span 
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border border-red-200 bg-red-50 text-red-700 cursor-help"
-        title={order?.cancel_reason ? `Người hủy: ${order.cancelled_by}\nThời gian: ${order.cancelled_at ? format(new Date(order.cancelled_at), 'dd/MM/yyyy HH:mm') : ''}\nLý do: ${order.cancel_reason}` : 'Thẻ đã hủy'}
-      >
-        Đã hủy
-      </span>
-      {order?.cancel_reason && (
-        <span className="text-[10px] text-slate-500 max-w-[120px] truncate" title={order.cancel_reason}>
-          {order.cancel_reason}
+  if (status === 'CANCELLED') {
+    return (
+      <div className="flex flex-col items-center gap-0.5">
+        <span 
+          className="text-red-600 font-semibold text-[11px] cursor-help"
+          title={order?.cancel_reason ? `Người hủy: ${order.cancelled_by}\nThời gian: ${order.cancelled_at ? format(new Date(order.cancelled_at), 'dd/MM/yyyy HH:mm') : ''}\nLý do: ${order.cancel_reason}` : 'Thẻ đã hủy'}
+        >
+          Đã hủy
         </span>
-      )}
-    </div>
-  );
+        {order?.cancel_reason && (
+          <span className="text-[10px] text-slate-500 max-w-[120px] truncate" title={order.cancel_reason}>
+            {order.cancel_reason}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // Check processing reasons for non-cancelled orders
+  const reasons: string[] = [];
+  if (order) {
+    if (!order.staff_id) {
+      reasons.push("Chưa điền Người cấp");
+    }
+    if (!order.customer_phone && !order.agency_id) {
+      reasons.push("Chưa điền Đại lý/SDT");
+    }
+    if (order.tnds_fee === 0 || order.total_fee === 0) {
+      reasons.push("Chưa điền Phí BH");
+    }
+  }
+
+  if (reasons.length > 0) {
+    return (
+      <div className="flex flex-col gap-0.5 items-center">
+        {reasons.map((r, ri) => (
+          <span key={ri} className="text-amber-600 font-semibold text-[10px] leading-tight text-center whitespace-normal max-w-[110px]">{r}</span>
+        ))}
+      </div>
+    );
+  }
+
+  return <span className="text-emerald-600 font-semibold text-[11px]">Hiệu lực</span>;
 }
 
 
@@ -1049,6 +1079,14 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser }: any) {
             </div>
           </div>
           
+          <div className="flex justify-end gap-3 pt-6 border-t mt-8">
+            <button type="button" onClick={onClose} className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50">
+              Hủy
+            </button>
+            <button type="submit" className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm">
+              Lưu thay đổi
+            </button>
+          </div>
         </form>
       </div>
     </div>
