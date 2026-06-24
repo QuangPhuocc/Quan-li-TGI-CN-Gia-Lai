@@ -70,6 +70,21 @@ function parseExcelNumber(val: any): number {
   return isNaN(num) ? 0 : num;
 }
 
+// Format serial number (D26-80-030101-260337049 -> D26...-260337049) to optimize width
+function formatSerialNumber(val: string): string {
+  if (!val) return '';
+  const trimmed = val.trim();
+  if (/^D\d{2}-/i.test(trimmed)) {
+    const parts = trimmed.split('-');
+    if (parts.length >= 2) {
+      const prefix = parts[0];
+      const suffix = parts[parts.length - 1];
+      return `${prefix}...-${suffix}`;
+    }
+  }
+  return val;
+}
+
 export default function Orders() {
   const { user } = useAuth();
   const { orders, users, changeLogs, addOrder, updateOrder, importOrders } = useData();
@@ -138,7 +153,7 @@ export default function Orders() {
     
     if (filterStatus !== 'ALL') {
       if (filterStatus === 'NEEDS_PROCESSING') {
-        result = result.filter(o => !o.agency_id || !o.customer_phone || !o.cod_amount);
+        result = result.filter(o => !o.staff_id || !o.cod_amount || (!o.customer_phone && !o.agency_id));
       } else {
         result = result.filter(o => o.status === filterStatus);
       }
@@ -696,7 +711,16 @@ export default function Orders() {
                 return (
                   <tr key={order.id} className="hover:bg-slate-50 transition-colors bg-white">
                     <td className="px-1 py-1 text-center border-r border-slate-200">{index + 1}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 font-medium text-slate-900 whitespace-nowrap">{order.serial_number || order.id}</td>
+                    <td 
+                      className="px-1 py-1 border-r border-slate-200 font-medium text-slate-900 whitespace-nowrap cursor-pointer select-all text-center"
+                      title={`Mã đầy đủ: ${order.serial_number || order.id}\n(Click 2 lần để copy)`}
+                      onDoubleClick={() => {
+                        navigator.clipboard.writeText(order.serial_number || order.id);
+                        alert(`Đã copy Mã GCN: ${order.serial_number || order.id}`);
+                      }}
+                    >
+                      {formatSerialNumber(order.serial_number || order.id)}
+                    </td>
                     <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[100px]" title={order.vehicle_owner}>{order.vehicle_owner}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.license_plate || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{format(new Date(order.issue_date), 'dd/MM/yyyy')}</td>
@@ -708,7 +732,7 @@ export default function Orders() {
                       <div className="flex flex-col gap-0.5 items-center">
                         <StatusBadge status={order.status} notes={order.notes} order={order} />
                         {order.status !== 'CANCELLED' && (
-                          <PaymentBadge status={order.payment_status} />
+                          <PaymentBadge status={order.cod_amount > 0 ? 'PAID' : order.payment_status} />
                         )}
                       </div>
                     </td>
@@ -810,7 +834,11 @@ function PaymentBadge({ status }: { status: string }) {
 }
 
 function StatusBadge({ status, notes, order }: { status: string, notes?: string, order?: any }) {
-  const needsProcessing = order && (!order.staff_id || !order.customer_phone || !order.agency_id || !order.cod_amount);
+  const needsProcessing = order && (
+    !order.staff_id || 
+    !order.cod_amount || 
+    (!order.customer_phone && !order.agency_id)
+  );
   
   if (status === 'ACTIVE') {
     if (needsProcessing) {
