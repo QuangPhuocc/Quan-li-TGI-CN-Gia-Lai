@@ -34,6 +34,7 @@ export interface InsuranceOrder {
   status: OrderStatus;
   notes?: string;
   expiration_date?: string; // Ngày hết hạn
+  statement_month?: string; // Bảng kê theo Tháng (YYYY-MM)
   cancelled_by?: string; // Người hủy (ID hoặc tên)
   cancelled_at?: string; // Thời gian hủy
   cancel_reason?: string; // Lý do hủy

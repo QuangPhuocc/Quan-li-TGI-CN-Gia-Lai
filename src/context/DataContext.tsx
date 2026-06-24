@@ -262,10 +262,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOrders(prev => prev.map(o => {
       if (idSet.has(o.id)) {
         const u = { ...o, ...updates, updated_at: new Date().toISOString() };
+        if (updates.tnds_fee !== undefined || updates.nn_fee !== undefined) {
+          u.total_fee = Number(updates.tnds_fee !== undefined ? updates.tnds_fee : o.tnds_fee) + Number(updates.nn_fee !== undefined ? updates.nn_fee : o.nn_fee);
+        }
+        if (updates.total_fee !== undefined) {
+          u.total_fee = Number(updates.total_fee);
+        }
         if (updates.effective_date && updates.effective_date !== o.effective_date) {
           const d = new Date(updates.effective_date);
           d.setFullYear(d.getFullYear() + 1);
           u.expiration_date = d.toISOString().split('T')[0];
+        }
+        if (u.cod_amount > 0) {
+          u.payment_status = 'PAID';
         }
         return u;
       }

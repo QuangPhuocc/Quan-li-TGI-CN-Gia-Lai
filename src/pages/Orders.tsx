@@ -92,7 +92,14 @@ export default function Orders() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [filterPayment, setFilterPayment] = useState('ALL');
-  const [filterMonth, setFilterMonth] = useState('ALL');
+  
+  const defaultMonth = useMemo(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }, []);
+
+  const [filterMonth, setFilterMonth] = useState(defaultMonth);
   const [filterProvider, setFilterProvider] = useState('ALL');
   const [filterInsurance, setFilterInsurance] = useState<InsuranceType | 'ALL'>('ALL');
   
@@ -150,6 +157,9 @@ export default function Orders() {
 
     if (filterMonth !== 'ALL') {
       result = result.filter(o => {
+        if (o.statement_month) {
+          return o.statement_month === filterMonth;
+        }
         const d = new Date(o.issue_date);
         const monthYear = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         return monthYear === filterMonth;
@@ -205,10 +215,28 @@ export default function Orders() {
   }, [orders]);
 
   const uniqueMonths = useMemo(() => {
-    const months = new Set(orders.map(o => {
-      const d = new Date(o.issue_date);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }));
+    const months = new Set<string>();
+    
+    const now = new Date();
+    const curMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const prevDate = new Date();
+    prevDate.setMonth(prevDate.getMonth() - 1);
+    const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+    
+    months.add(curMonth);
+    months.add(prevMonth);
+    
+    orders.forEach(o => {
+      if (o.statement_month) {
+        months.add(o.statement_month);
+      } else if (o.issue_date) {
+        const d = new Date(o.issue_date);
+        if (!isNaN(d.getTime())) {
+          months.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+        }
+      }
+    });
+    
     return Array.from(months).sort().reverse();
   }, [orders]);
 
@@ -498,22 +526,8 @@ export default function Orders() {
             }
           }
 
-          // Resolve Insurance Type
-          const typeStr = String(getVal('insurance_type') || '').trim().toLowerCase();
-          let insurance_type: any = 'TNDS_OTO';
-          if (typeStr.includes('tnds') && typeStr.includes('máy')) {
-            insurance_type = 'TNDS_XEMAY';
-          } else if (typeStr.includes('vật chất') || typeStr.includes('vcx') || typeStr.includes('tự nguyện')) {
-            insurance_type = 'VCX_OTO';
-          } else if (typeStr.includes('y tế') || typeStr.includes('y_te') || typeStr.includes('sức khỏe')) {
-            insurance_type = 'Y_TE';
-          } else if (typeStr.includes('etc') || typeStr.includes('vetc') || typeStr.includes('epass')) {
-            insurance_type = 'ETC';
-          } else if (typeStr.includes('khác') || typeStr.includes('khac')) {
-            insurance_type = 'KHAC';
-          } else if (typeStr.includes('tnds')) {
-            insurance_type = 'TNDS_OTO';
-          }
+          // Force active tab's insurance type since we only allow import inside specific tabs
+          const insurance_type = filterInsurance as InsuranceType;
 
           // Resolve Status
           const statusVal = String(getVal('status') || '').trim().toLowerCase();
@@ -611,12 +625,14 @@ export default function Orders() {
               <Clock className="w-4 h-4" /> Nhật ký hệ thống
             </button>
           )}
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50"
-          >
-            <Upload className="w-4 h-4" /> Import
-          </button>
+          {filterInsurance !== 'ALL' && (
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50"
+            >
+              <Upload className="w-4 h-4" /> Import
+            </button>
+          )}
           <button 
             onClick={handleExportExcel}
             className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50"
@@ -888,6 +904,7 @@ export default function Orders() {
           onSave={handleSave} 
           users={users}
           currentUser={user!}
+          defaultStatementMonth={filterMonth !== 'ALL' ? filterMonth : undefined}
         />
       )}
 
@@ -992,9 +1009,22 @@ function StatusBadge({ status, notes, order }: { status: string, notes?: string,
 }
 
 
-function OrderFormModal({ order, onClose, onSave, users, currentUser }: any) {
+function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultStatementMonth }: any) {
+  const monthOptions = useMemo(() => {
+    const options = [];
+    const now = new Date();
+    for (let i = -12; i <= 6; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = `Tháng ${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      options.push({ key, label });
+    }
+    return options.reverse();
+  }, []);
+
   const [formData, setFormData] = useState({
     insurance_type: order?.insurance_type || 'TNDS_OTO',
+    statement_month: order?.statement_month || defaultStatementMonth || new Date().toISOString().substring(0, 7),
     serial_number: order?.serial_number || '',
     vehicle_owner: order?.vehicle_owner || '',
     license_plate: order?.license_plate || '',
@@ -1066,13 +1096,23 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser }: any) {
                   </select>
                 </div>
                 <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Bảng kê theo Tháng <span className="text-red-500">*</span></label>
+                  <select required name="statement_month" value={formData.statement_month} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    {monthOptions.map(opt => (
+                      <option key={opt.key} value={opt.key}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Số Seri / GCN <span className="text-red-500">*</span></label>
+                  <input required type="text" name="serial_number" value={formData.serial_number} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Hãng (Provider)</label>
                   <input type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="VD: VIỄN ĐÔNG" />
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Số Seri / Số Thẻ / GCN <span className="text-red-500">*</span></label>
-                <input required type="text" name="serial_number" value={formData.serial_number} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1147,7 +1187,7 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser }: any) {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Nhân viên (Người cấp)</label>
                       <select name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
                         <option value="">Chọn nhân viên...</option>
-                        {users.filter(u => u.role === 'STAFF').map(u => (
+                        {users.filter((u: any) => u.role === 'STAFF').map((u: any) => (
                           <option key={u.id} value={u.id}>{u.fullname}</option>
                         ))}
                       </select>
@@ -1157,7 +1197,7 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser }: any) {
                     <label className="block text-sm font-medium text-slate-700 mb-1">Đại lý</label>
                     <select name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
                       <option value="">Không có</option>
-                      {users.filter(u => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map(u => (
+                      {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
                         <option key={u.id} value={u.id}>{u.fullname}</option>
                       ))}
                     </select>
@@ -1392,6 +1432,22 @@ function SystemHistoryModal({ onClose, changeLogs }: { onClose: () => void; chan
 
 function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previewData: { newOrders: any[], warnings: any[] }; onClose: () => void; onConfirm: (finalOrders: any[]) => void; users: User[] }) {
   const [orders, setOrders] = useState<any[]>(previewData.newOrders);
+  const [statementMonth, setStatementMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const monthOptions = useMemo(() => {
+    const options = [];
+    const now = new Date();
+    for (let i = -12; i <= 6; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = `Tháng ${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      options.push({ key, label });
+    }
+    return options.reverse();
+  }, []);
   
   const handleSelectStaff = (index: number, val: string) => {
     setOrders(prev => prev.map((o, idx) => idx === index ? { ...o, staff_id: val } : o));
@@ -1402,7 +1458,11 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
   };
 
   const handleConfirm = () => {
-    onConfirm(orders);
+    const finalized = orders.map(o => ({
+      ...o,
+      statement_month: statementMonth
+    }));
+    onConfirm(finalized);
   };
 
   return (
@@ -1419,6 +1479,22 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50">
+          <div className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h4 className="font-semibold text-slate-800 text-sm">Chọn Bảng kê theo Tháng</h4>
+              <p className="text-xs text-slate-500">Tất cả các thẻ trong tệp import này sẽ được lưu vào Bảng kê của tháng đã chọn.</p>
+            </div>
+            <select
+              value={statementMonth}
+              onChange={(e) => setStatementMonth(e.target.value)}
+              className="border border-slate-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium text-slate-700 min-w-[200px]"
+            >
+              {monthOptions.map(opt => (
+                <option key={opt.key} value={opt.key}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
           {previewData.warnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 max-h-[150px] overflow-y-auto space-y-2">
               <h4 className="font-semibold text-amber-800 text-sm flex items-center gap-2">
@@ -1517,22 +1593,52 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
 }
 
 function BatchEditModal({ onClose, onSave, users, currentUser }: any) {
+  const monthOptions = useMemo(() => {
+    const options = [];
+    const now = new Date();
+    for (let i = -12; i <= 6; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = `Tháng ${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      options.push({ key, label });
+    }
+    return options.reverse();
+  }, []);
+
   const [formData, setFormData] = useState({
+    issue_date: new Date().toISOString().split('T')[0],
+    effective_date: new Date().toISOString().split('T')[0],
+    tnds_fee: 0,
+    nn_fee: 0,
+    total_fee: 0,
     status: 'ACTIVE',
-    payment_status: 'UNPAID',
     staff_id: '',
     agency_id: '',
-    provider: '',
+    customer_phone: '',
+    cod_amount: 0,
+    shipping_fee: 0,
     notes: '',
+    provider: '',
+    statement_month: new Date().toISOString().substring(0, 7),
+    payment_status: 'UNPAID',
   });
   
   const [enabledFields, setEnabledFields] = useState<{ [key: string]: boolean }>({
+    issue_date: false,
+    effective_date: false,
+    tnds_fee: false,
+    nn_fee: false,
+    total_fee: false,
     status: false,
-    payment_status: false,
     staff_id: false,
     agency_id: false,
-    provider: false,
+    customer_phone: false,
+    cod_amount: false,
+    shipping_fee: false,
     notes: false,
+    provider: false,
+    statement_month: false,
+    payment_status: false,
   });
 
   const handleToggleField = (field: string) => {
@@ -1549,7 +1655,11 @@ function BatchEditModal({ onClose, onSave, users, currentUser }: any) {
     const updates: any = {};
     Object.keys(enabledFields).forEach(key => {
       if (enabledFields[key]) {
-        updates[key] = formData[key as keyof typeof formData];
+        let val = formData[key as keyof typeof formData];
+        if (['tnds_fee', 'nn_fee', 'total_fee', 'cod_amount', 'shipping_fee'].includes(key)) {
+          val = Number(val);
+        }
+        updates[key] = val;
       }
     });
     if (Object.keys(updates).length === 0) {
@@ -1561,7 +1671,7 @@ function BatchEditModal({ onClose, onSave, users, currentUser }: any) {
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-white flex-shrink-0">
           <h2 className="text-base font-semibold text-slate-800">Điều chỉnh hàng loạt</h2>
           <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer">
@@ -1572,74 +1682,161 @@ function BatchEditModal({ onClose, onSave, users, currentUser }: any) {
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
           <p className="text-[11px] text-slate-500 mb-2">Tích chọn ô vuông bên cạnh trường muốn thay đổi, sau đó chọn/nhập giá trị mới.</p>
           
-          {/* Status */}
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={enabledFields.status} onChange={() => handleToggleField('status')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-700 mb-1">Trạng thái đơn</label>
-              <select disabled={!enabledFields.status} name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
-                <option value="ACTIVE">Hiệu lực</option>
-                <option value="CANCELLED">Đã hủy</option>
-              </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Issue Date */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.issue_date} onChange={() => handleToggleField('issue_date')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Ngày cấp</label>
+                <input disabled={!enabledFields.issue_date} type="date" name="issue_date" value={formData.issue_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
-          </div>
 
-          {/* Payment */}
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={enabledFields.payment_status} onChange={() => handleToggleField('payment_status')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-700 mb-1">Thanh toán</label>
-              <select disabled={!enabledFields.payment_status} name="payment_status" value={formData.payment_status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
-                <option value="UNPAID">Chưa thanh toán</option>
-                <option value="PARTIAL">Thanh toán 1 phần</option>
-                <option value="PAID">Đã thanh toán</option>
-              </select>
+            {/* Effective Date */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.effective_date} onChange={() => handleToggleField('effective_date')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Ngày hiệu lực</label>
+                <input disabled={!enabledFields.effective_date} type="date" name="effective_date" value={formData.effective_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
-          </div>
 
-          {/* Staff */}
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={enabledFields.staff_id} onChange={() => handleToggleField('staff_id')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-700 mb-1">Người cấp (Nhân viên)</label>
-              <select disabled={!enabledFields.staff_id} name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
-                <option value="">Chọn nhân viên...</option>
-                {users.filter((u: any) => u.role === 'STAFF').map((u: any) => (
-                  <option key={u.id} value={u.id}>{u.fullname}</option>
-                ))}
-              </select>
+            {/* Phí TNDS */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.tnds_fee} onChange={() => handleToggleField('tnds_fee')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Phí TNDS</label>
+                <input disabled={!enabledFields.tnds_fee} type="number" name="tnds_fee" value={formData.tnds_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
-          </div>
 
-          {/* Agency */}
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={enabledFields.agency_id} onChange={() => handleToggleField('agency_id')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-700 mb-1">Đại lý</label>
-              <select disabled={!enabledFields.agency_id} name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
-                <option value="">Không có</option>
-                {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
-                  <option key={u.id} value={u.id}>{u.fullname}</option>
-                ))}
-              </select>
+            {/* LP NNTX */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.nn_fee} onChange={() => handleToggleField('nn_fee')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">LP NNTX</label>
+                <input disabled={!enabledFields.nn_fee} type="number" name="nn_fee" value={formData.nn_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
-          </div>
 
-          {/* Provider */}
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={enabledFields.provider} onChange={() => handleToggleField('provider')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-700 mb-1">Hãng (Provider)</label>
-              <input disabled={!enabledFields.provider} type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" placeholder="VD: VIỄN ĐÔNG" />
+            {/* Tổng phí */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.total_fee} onChange={() => handleToggleField('total_fee')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Tổng phí</label>
+                <input disabled={!enabledFields.total_fee} type="number" name="total_fee" value={formData.total_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
-          </div>
 
-          {/* Notes */}
-          <div className="flex items-center gap-3">
-            <input type="checkbox" checked={enabledFields.notes} onChange={() => handleToggleField('notes')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-700 mb-1">Ghi chú / Mã GD</label>
-              <textarea disabled={!enabledFields.notes} name="notes" value={formData.notes} onChange={handleChange} rows={2} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+            {/* Trạng thái đơn */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.status} onChange={() => handleToggleField('status')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Trạng thái đơn</label>
+                <select disabled={!enabledFields.status} name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                  <option value="ACTIVE">Hiệu lực</option>
+                  <option value="CANCELLED">Đã hủy</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Staff */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.staff_id} onChange={() => handleToggleField('staff_id')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Người cấp (Nhân viên)</label>
+                <select disabled={!enabledFields.staff_id} name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                  <option value="">Chọn nhân viên...</option>
+                  {users.filter((u: any) => u.role === 'STAFF').map((u: any) => (
+                    <option key={u.id} value={u.id}>{u.fullname}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Agency */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.agency_id} onChange={() => handleToggleField('agency_id')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Đại lý</label>
+                <select disabled={!enabledFields.agency_id} name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                  <option value="">Không có</option>
+                  {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
+                    <option key={u.id} value={u.id}>{u.fullname}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Phone */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.customer_phone} onChange={() => handleToggleField('customer_phone')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">SĐT Khách</label>
+                <input disabled={!enabledFields.customer_phone} type="text" name="customer_phone" value={formData.customer_phone} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            {/* COD */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.cod_amount} onChange={() => handleToggleField('cod_amount')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Số tiền COD</label>
+                <input disabled={!enabledFields.cod_amount} type="number" name="cod_amount" value={formData.cod_amount} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            {/* Shipping Fee */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.shipping_fee} onChange={() => handleToggleField('shipping_fee')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Phí Vận chuyển</label>
+                <input disabled={!enabledFields.shipping_fee} type="number" name="shipping_fee" value={formData.shipping_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            {/* Provider */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.provider} onChange={() => handleToggleField('provider')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Hãng (Provider)</label>
+                <input disabled={!enabledFields.provider} type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" placeholder="VD: VIỄN ĐÔNG" />
+              </div>
+            </div>
+
+            {/* Statement Month */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.statement_month} onChange={() => handleToggleField('statement_month')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Bảng kê theo Tháng</label>
+                <select disabled={!enabledFields.statement_month} name="statement_month" value={formData.statement_month} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                  {monthOptions.map(opt => (
+                    <option key={opt.key} value={opt.key}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Payment Status */}
+            <div className="flex items-center gap-3">
+              <input type="checkbox" checked={enabledFields.payment_status} onChange={() => handleToggleField('payment_status')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Thanh toán</label>
+                <select disabled={!enabledFields.payment_status} name="payment_status" value={formData.payment_status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700">
+                  <option value="UNPAID">Chưa thanh toán</option>
+                  <option value="PARTIAL">Thanh toán 1 phần</option>
+                  <option value="PAID">Đã thanh toán</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="flex items-center gap-3 md:col-span-2">
+              <input type="checkbox" checked={enabledFields.notes} onChange={() => handleToggleField('notes')} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Ghi chú / Mã GD</label>
+                <textarea disabled={!enabledFields.notes} name="notes" value={formData.notes} onChange={handleChange} rows={2} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs disabled:bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
           </div>
 

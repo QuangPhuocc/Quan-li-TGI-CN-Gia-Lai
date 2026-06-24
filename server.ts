@@ -41,14 +41,19 @@ if (!fs.existsSync(USERS_FILE)) {
   writeJsonAtomic(USERS_FILE, mockUsers);
 }
 if (!fs.existsSync(ORDERS_FILE)) {
-  // Seed default expiration date if not present
+  // Seed default expiration date and statement month if not present
   const seededOrders = mockOrders.map(o => {
-    if (!o.expiration_date) {
-      const d = new Date(o.effective_date);
+    const updated = { ...o };
+    if (!updated.expiration_date) {
+      const d = new Date(updated.effective_date);
       d.setFullYear(d.getFullYear() + 1);
-      return { ...o, expiration_date: d.toISOString().split('T')[0] };
+      updated.expiration_date = d.toISOString().split('T')[0];
     }
-    return o;
+    if (!updated.statement_month) {
+      const d = new Date(updated.issue_date);
+      updated.statement_month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+    return updated;
   });
   writeJsonAtomic(ORDERS_FILE, seededOrders);
 }
@@ -56,10 +61,36 @@ if (!fs.existsSync(LOGS_FILE)) {
   writeJsonAtomic(LOGS_FILE, []);
 }
 
-// Read helpers
+// Read helpers and self-healing migrations
 function readOrders(): InsuranceOrder[] {
   try {
-    return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf-8'));
+    const list: InsuranceOrder[] = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf-8'));
+    let migrated = false;
+    const result = list.map(o => {
+      let changed = false;
+      const updated = { ...o };
+      if (!updated.statement_month && updated.issue_date) {
+        const d = new Date(updated.issue_date);
+        if (!isNaN(d.getTime())) {
+          updated.statement_month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          changed = true;
+        }
+      }
+      if (!updated.expiration_date && updated.effective_date) {
+        const d = new Date(updated.effective_date);
+        if (!isNaN(d.getTime())) {
+          d.setFullYear(d.getFullYear() + 1);
+          updated.expiration_date = d.toISOString().split('T')[0];
+          changed = true;
+        }
+      }
+      if (changed) migrated = true;
+      return updated;
+    });
+    if (migrated) {
+      writeJsonAtomic(ORDERS_FILE, result);
+    }
+    return result;
   } catch (e) {
     return [];
   }
@@ -219,10 +250,19 @@ app.post('/api/orders/bulk-update', (req, res) => {
   const updated = orders.map(o => {
     if (idSet.has(o.id)) {
       const u = { ...o, ...updates, updated_at: new Date().toISOString() };
+      if (updates.tnds_fee !== undefined || updates.nn_fee !== undefined) {
+        u.total_fee = Number(updates.tnds_fee !== undefined ? updates.tnds_fee : o.tnds_fee) + Number(updates.nn_fee !== undefined ? updates.nn_fee : o.nn_fee);
+      }
+      if (updates.total_fee !== undefined) {
+        u.total_fee = Number(updates.total_fee);
+      }
       if (updates.effective_date && updates.effective_date !== o.effective_date) {
         const d = new Date(updates.effective_date);
         d.setFullYear(d.getFullYear() + 1);
         u.expiration_date = d.toISOString().split('T')[0];
+      }
+      if (u.cod_amount > 0) {
+        u.payment_status = 'PAID';
       }
       return u;
     }
