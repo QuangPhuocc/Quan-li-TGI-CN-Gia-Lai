@@ -1,5 +1,13 @@
 export type Role = 'MASTER' | 'ACCOUNTANT' | 'STAFF' | 'AGENCY';
 
+export const ROLE_LABELS: Record<Role, string> = {
+  MASTER: 'Master',
+  ACCOUNTANT: 'Quản lý',
+  STAFF: 'Nhân viên',
+  AGENCY: 'Đại lý'
+};
+
+
 export interface User {
   id: string;
   username: string;

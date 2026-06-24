@@ -103,6 +103,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOrders(prev => prev.map(o => {
       if (o.id === id) {
         const updated = { ...o, ...updates, updated_at: new Date().toISOString() };
+        if (updates.status === 'CANCELLED') {
+          updated.tnds_fee = 0;
+          updated.nn_fee = 0;
+          updated.total_fee = 0;
+          updated.cod_amount = 0;
+          updated.shipping_fee = 0;
+        }
         if (updates.effective_date && updates.effective_date !== o.effective_date) {
           const d = new Date(updates.effective_date);
           d.setFullYear(d.getFullYear() + 1);
@@ -177,17 +184,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Optimistic UI updates
     setOrders(prev => {
       const updated = [...prev];
-      const toAdd: InsuranceOrder[] = [];
-      newOrders.forEach(no => {
-        const idx = updated.findIndex(o => o.id === no.id || (o.serial_number && o.serial_number === no.serial_number));
-        if (idx > -1) {
-          updated[idx] = { ...updated[idx], ...no, updated_at: new Date().toISOString() };
-        } else {
-          toAdd.push(no);
+      const processedNewOrders = newOrders.map((no: InsuranceOrder) => {
+        const existing = updated.find(o => o.id === no.id || (o.serial_number && o.serial_number === no.serial_number));
+        const processed = existing ? {
+          ...existing,
+          ...no,
+          id: existing.id,
+          created_at: existing.created_at,
+          updated_at: new Date().toISOString()
+        } : { ...no };
+        
+        if (processed.status === 'CANCELLED') {
+          processed.tnds_fee = 0;
+          processed.nn_fee = 0;
+          processed.total_fee = 0;
+          processed.cod_amount = 0;
+          processed.shipping_fee = 0;
         }
+        return processed;
       });
-      updated.unshift(...toAdd);
-      return updated;
+
+      const processedIds = new Set(processedNewOrders.map(o => o.id));
+      const processedSerials = new Set(processedNewOrders.map(o => o.serial_number).filter(Boolean));
+      const cleanExisting = updated.filter(o => !processedIds.has(o.id) && !(o.serial_number && processedSerials.has(o.serial_number)));
+
+      return [...processedNewOrders, ...cleanExisting];
     });
     setChangeLogs(prev => [...logs, ...prev]);
 
@@ -262,6 +283,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOrders(prev => prev.map(o => {
       if (idSet.has(o.id)) {
         const u = { ...o, ...updates, updated_at: new Date().toISOString() };
+        if (updates.status === 'CANCELLED') {
+          u.tnds_fee = 0;
+          u.nn_fee = 0;
+          u.total_fee = 0;
+          u.cod_amount = 0;
+          u.shipping_fee = 0;
+        }
         if (updates.tnds_fee !== undefined || updates.nn_fee !== undefined) {
           u.total_fee = Number(updates.tnds_fee !== undefined ? updates.tnds_fee : o.tnds_fee) + Number(updates.nn_fee !== undefined ? updates.nn_fee : o.nn_fee);
         }

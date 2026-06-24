@@ -52,7 +52,7 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsO
           <FileText className="w-5 h-5 flex-shrink-0" />
           {isOpen && <span>Đơn Bảo Hiểm</span>}
         </NavLink>
-        {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+        {user?.role === 'MASTER' && (
           <NavLink
             to="/staffs"
             className={({ isActive }) =>
@@ -89,7 +89,14 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsO
       <div className="mt-auto pt-4 border-t border-slate-800 overflow-hidden">
         <div className={cn("px-2", isOpen ? "text-left" : "text-center")}>
           <p className="text-sm font-medium truncate" title={user?.fullname}>{isOpen ? user?.fullname : user?.fullname.charAt(0)}</p>
-          {isOpen && <p className="text-xs font-semibold text-blue-400 mt-1">{user?.role}</p>}
+          {isOpen && (
+            <p className="text-xs font-semibold text-blue-400 mt-1">
+              {user?.role === 'MASTER' ? 'Master' :
+               user?.role === 'ACCOUNTANT' ? 'Quản lý' :
+               user?.role === 'STAFF' ? 'Nhân viên' :
+               user?.role === 'AGENCY' ? 'Đại lý' : user?.role}
+            </p>
+          )}
         </div>
       </div>
     </div>

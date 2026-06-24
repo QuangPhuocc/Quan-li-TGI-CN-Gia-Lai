@@ -22,7 +22,7 @@ export default function Staffs() {
   const [filterInsurance, setFilterInsurance] = useState<InsuranceType | 'ALL'>('ALL');
   const [selectedStaffId, setSelectedStaffId] = useState<string>('ALL');
 
-  if (user?.role !== 'MASTER' && user?.role !== 'ACCOUNTANT') {
+  if (user?.role !== 'MASTER') {
     return <Navigate to="/" replace />;
   }
 

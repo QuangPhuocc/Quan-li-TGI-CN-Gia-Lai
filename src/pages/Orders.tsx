@@ -101,7 +101,7 @@ export default function Orders() {
 
   const [filterMonth, setFilterMonth] = useState(defaultMonth);
   const [filterProvider, setFilterProvider] = useState('ALL');
-  const [filterInsurance, setFilterInsurance] = useState<InsuranceType | 'ALL'>('ALL');
+  const [filterInsurance, setFilterInsurance] = useState<InsuranceType>('TNDS_OTO');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<InsuranceOrder | null>(null);
@@ -140,11 +140,117 @@ export default function Orders() {
   }, [searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider]);
 
   // New Upgrade states
-  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
-  const [cancelReason, setCancelReason] = useState('');
   const [historyOrderId, setHistoryOrderId] = useState<string | null>(null);
   const [isSystemHistoryOpen, setIsSystemHistoryOpen] = useState(false);
   const [importPreview, setImportPreview] = useState<{ newOrders: InsuranceOrder[], warnings: any[] } | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editedRows, setEditedRows] = useState<{ [id: string]: Partial<InsuranceOrder> }>({});
+
+  const highlightText = (text: string, search: string) => {
+    if (!search || !text) return text;
+    const parts = text.split(new RegExp(`(${search.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')})`, 'gi'));
+    return (
+      <>
+        {parts.map((part, i) => 
+          part.toLowerCase() === search.toLowerCase() 
+            ? <mark key={i} className="bg-sky-200 text-sky-900 rounded-[2px] px-[2px]">{part}</mark> 
+            : part
+        )}
+      </>
+    );
+  };
+
+  const getEditValue = (orderId: string, field: keyof InsuranceOrder, defaultValue: any) => {
+    const rowUpdates = editedRows[orderId];
+    if (rowUpdates && rowUpdates[field] !== undefined) {
+      return rowUpdates[field];
+    }
+    return defaultValue === undefined || defaultValue === null ? '' : defaultValue;
+  };
+
+  const handleCellChange = (id: string, field: keyof InsuranceOrder, value: any) => {
+    setEditedRows(prev => {
+      const rowUpdates = { ...(prev[id] || {}), [field]: value };
+      
+      const currentOrder = orders.find(o => o.id === id);
+      if (!currentOrder) return prev;
+
+      if (field === 'tnds_fee' || field === 'nn_fee') {
+        const tnds = Number(field === 'tnds_fee' ? value : (rowUpdates.tnds_fee !== undefined ? rowUpdates.tnds_fee : currentOrder.tnds_fee || 0));
+        const nn = Number(field === 'nn_fee' ? value : (rowUpdates.nn_fee !== undefined ? rowUpdates.nn_fee : currentOrder.nn_fee || 0));
+        rowUpdates.total_fee = tnds + nn;
+      }
+      
+      if (field === 'cod_amount') {
+        const cod = Number(value);
+        if (cod > 0) {
+          rowUpdates.payment_status = 'PAID';
+        }
+      }
+      
+      if (field === 'status' && value === 'CANCELLED') {
+        rowUpdates.tnds_fee = 0;
+        rowUpdates.nn_fee = 0;
+        rowUpdates.total_fee = 0;
+        rowUpdates.cod_amount = 0;
+        rowUpdates.shipping_fee = 0;
+      }
+      
+      return { ...prev, [id]: rowUpdates };
+    });
+  };
+
+  const handleSaveInlineEdits = async () => {
+    const modifiedIds = Object.keys(editedRows);
+    if (modifiedIds.length === 0) {
+      setIsEditMode(false);
+      return;
+    }
+    
+    const updatedOrdersList: InsuranceOrder[] = [];
+    const logs: ChangeLog[] = [];
+    
+    modifiedIds.forEach(id => {
+      const original = orders.find(o => o.id === id);
+      if (!original) return;
+      
+      const updates = editedRows[id];
+      const updated = {
+        ...original,
+        ...updates,
+        updated_at: new Date().toISOString()
+      } as InsuranceOrder;
+      
+      const changes: string[] = [];
+      Object.keys(updates).forEach(key => {
+        const k = key as keyof InsuranceOrder;
+        if (updates[k] !== original[k]) {
+          changes.push(`${k}: ${original[k]} -> ${updates[k]}`);
+        }
+      });
+      
+      if (changes.length > 0) {
+        updatedOrdersList.push(updated);
+        logs.push({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          order_id: id,
+          serial_number: updated.serial_number || id,
+          action: 'EDIT',
+          user_fullname: user!.fullname,
+          timestamp: new Date().toISOString(),
+          details: `Chỉnh sửa trực tiếp trên bảng: ${changes.join(', ')}`
+        });
+      }
+    });
+    
+    if (updatedOrdersList.length > 0) {
+      importOrders(updatedOrdersList, logs);
+    }
+    
+    setIsEditMode(false);
+    setEditedRows({});
+    alert(`Đã lưu thay đổi cho ${updatedOrdersList.length} thẻ bảo hiểm!`);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -206,7 +312,37 @@ export default function Orders() {
       result = result.filter(o => o.payment_status === filterPayment);
     }
 
-    return result;
+    const sortedResult = [...result].sort((a, b) => {
+      // 1. Staff Name (A-Z)
+      const staffA = users.find(u => u.id === a.staff_id)?.fullname || '';
+      const staffB = users.find(u => u.id === b.staff_id)?.fullname || '';
+      const staffComp = staffA.localeCompare(staffB, 'vi', { sensitivity: 'base' });
+      if (staffComp !== 0) return staffComp;
+
+      // 2. Status (ACTIVE > other > CANCELLED)
+      const getStatusRank = (st: string) => {
+        if (st === 'ACTIVE') return 1;
+        if (st === 'CANCELLED') return 3;
+        return 2;
+      };
+      const statusComp = getStatusRank(a.status) - getStatusRank(b.status);
+      if (statusComp !== 0) return statusComp;
+
+      // 3. Agency Name (A-Z)
+      const foundAgencyA = users.find(u => u.id === a.agency_id);
+      const agencyA = foundAgencyA ? foundAgencyA.fullname : (a.agency_id || '');
+      const foundAgencyB = users.find(u => u.id === b.agency_id);
+      const agencyB = foundAgencyB ? foundAgencyB.fullname : (b.agency_id || '');
+      const agencyComp = agencyA.localeCompare(agencyB, 'vi', { sensitivity: 'base' });
+      if (agencyComp !== 0) return agencyComp;
+
+      // 4. Issue Date (oldest to newest)
+      const timeA = new Date(a.issue_date).getTime() || 0;
+      const timeB = new Date(b.issue_date).getTime() || 0;
+      return timeA - timeB;
+    });
+
+    return sortedResult;
   }, [orders, user, users, searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider]);
 
   const uniqueProviders = useMemo(() => {
@@ -241,7 +377,6 @@ export default function Orders() {
   }, [orders]);
 
   const INSURANCE_TABS = [
-    { id: 'ALL', label: 'Tất cả' },
     { id: 'TNDS_OTO', label: 'TNDS Ô tô' },
     { id: 'VCX_OTO', label: 'VCX Ô tô' },
     { id: 'TNDS_XEMAY', label: 'TNDS Xe máy' },
@@ -274,8 +409,18 @@ export default function Orders() {
 
   const handleStatusChange = (id: string, status: 'ACTIVE' | 'CANCELLED') => {
     if (status === 'CANCELLED') {
-      setCancellingOrderId(id);
-      setCancelReason('');
+      if (window.confirm('Bạn có chắc chắn muốn hủy thẻ này?')) {
+        updateOrder(id, { 
+          status: 'CANCELLED',
+          tnds_fee: 0,
+          nn_fee: 0,
+          total_fee: 0,
+          cod_amount: 0,
+          shipping_fee: 0,
+          cancelled_by: user!.fullname,
+          cancelled_at: new Date().toISOString()
+        }, user!.fullname, 'Hủy thẻ bảo hiểm (phí và COD/Vận chuyển về 0)');
+      }
     } else {
       if (window.confirm('Bạn có chắc muốn khôi phục đơn này về trạng thái hoạt động?')) {
         updateOrder(id, { 
@@ -286,20 +431,6 @@ export default function Orders() {
         }, user!.fullname, 'Khôi phục thẻ bảo hiểm về trạng thái hoạt động');
       }
     }
-  };
-
-  const confirmCancel = () => {
-    if (!cancelReason.trim()) {
-      alert('Vui lòng nhập lý do hủy');
-      return;
-    }
-    updateOrder(cancellingOrderId!, {
-      status: 'CANCELLED',
-      cancelled_by: user!.fullname,
-      cancelled_at: new Date().toISOString(),
-      cancel_reason: cancelReason
-    }, user!.fullname, `Hủy thẻ bảo hiểm. Lý do: ${cancelReason}`);
-    setCancellingOrderId(null);
   };
 
   // Excel Export
@@ -614,36 +745,36 @@ export default function Orders() {
         className="hidden" 
       />
 
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 flex-shrink-0">
-        <h1 className="text-2xl font-semibold text-slate-800">Quản lý Đơn Bảo Hiểm</h1>
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3 flex-shrink-0">
+        <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+          Bảng đối soát thống kê / {INSURANCE_TABS.find(t => t.id === filterInsurance)?.label || ''}
+        </h1>
+        <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar py-1">
           {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
             <button 
               onClick={() => setIsSystemHistoryOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-100 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-200 text-slate-700"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-lg text-xs font-semibold hover:bg-slate-200 text-slate-700 whitespace-nowrap cursor-pointer"
             >
-              <Clock className="w-4 h-4" /> Nhật ký hệ thống
-            </button>
-          )}
-          {filterInsurance !== 'ALL' && (
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50"
-            >
-              <Upload className="w-4 h-4" /> Import
+              <Clock className="w-3.5 h-3.5" /> Nhật ký hệ thống
             </button>
           )}
           <button 
-            onClick={handleExportExcel}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold hover:bg-slate-50 text-slate-700 whitespace-nowrap cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Export
+            <Upload className="w-3.5 h-3.5" /> Thêm bảng kê
+          </button>
+          <button 
+            onClick={handleExportExcel}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold hover:bg-slate-50 text-slate-700 whitespace-nowrap cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" /> Xuất bảng kê
           </button>
           <button 
             onClick={() => handleOpenModal()}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 shadow-sm whitespace-nowrap cursor-pointer"
           >
-            <Plus className="w-4 h-4" /> Thêm đơn
+            <Plus className="w-3.5 h-3.5" /> Thêm đơn
           </button>
         </div>
       </div>
@@ -717,6 +848,35 @@ export default function Orders() {
               <option value="PARTIAL">Thanh toán 1 phần</option>
               <option value="PAID">Đã thanh toán</option>
             </select>
+            {!isEditMode ? (
+              <button
+                onClick={() => {
+                  setIsEditMode(true);
+                  setEditedRows({});
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm cursor-pointer whitespace-nowrap"
+              >
+                Chỉnh sửa
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveInlineEdits}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 shadow-sm cursor-pointer whitespace-nowrap"
+                >
+                  Lưu thay đổi
+                </button>
+                <button
+                  onClick={() => {
+                    setIsEditMode(false);
+                    setEditedRows({});
+                  }}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 shadow-sm cursor-pointer whitespace-nowrap"
+                >
+                  Hủy
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -733,12 +893,14 @@ export default function Orders() {
             >
               Điều chỉnh hàng loạt
             </button>
-            <button
-              onClick={handleBulkDelete}
-              className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700 transition-colors shadow-sm cursor-pointer"
-            >
-              Xóa hàng loạt
-            </button>
+            {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+              <button
+                onClick={handleBulkDelete}
+                className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700 transition-colors shadow-sm cursor-pointer"
+              >
+                Xóa hàng loạt
+              </button>
+            )}
             <button
               onClick={() => setSelectedIds([])}
               className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
@@ -799,6 +961,198 @@ export default function Orders() {
                 const staffName = users.find(u => u.id === order.staff_id)?.fullname || '';
                 const foundAgency = users.find(u => u.id === order.agency_id);
                 const agencyName = foundAgency ? foundAgency.fullname : (order.agency_id || '');
+                
+                if (isEditMode) {
+                  return (
+                    <tr key={order.id} className="hover:bg-slate-50 transition-colors bg-white">
+                      <td className="px-1 py-0.5 text-center border-r border-slate-200 w-8">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedIds.includes(order.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedIds(prev => [...prev, order.id]);
+                            } else {
+                              setSelectedIds(prev => prev.filter(id => id !== order.id));
+                            }
+                          }}
+                          className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 text-center border-r border-slate-200 font-medium">{index + 1}</td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="text" 
+                          value={getEditValue(order.id, 'serial_number', order.serial_number)} 
+                          onChange={(e) => handleCellChange(order.id, 'serial_number', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="text" 
+                          value={getEditValue(order.id, 'vehicle_owner', order.vehicle_owner)} 
+                          onChange={(e) => handleCellChange(order.id, 'vehicle_owner', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px]"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="text" 
+                          value={getEditValue(order.id, 'license_plate', order.license_plate)} 
+                          onChange={(e) => handleCellChange(order.id, 'license_plate', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="date" 
+                          value={getEditValue(order.id, 'issue_date', order.issue_date)} 
+                          onChange={(e) => handleCellChange(order.id, 'issue_date', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="date" 
+                          value={getEditValue(order.id, 'effective_date', order.effective_date)} 
+                          onChange={(e) => handleCellChange(order.id, 'effective_date', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="number" 
+                          value={getEditValue(order.id, 'tnds_fee', order.tnds_fee)} 
+                          onChange={(e) => handleCellChange(order.id, 'tnds_fee', Number(e.target.value))}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="number" 
+                          value={getEditValue(order.id, 'nn_fee', order.nn_fee)} 
+                          onChange={(e) => handleCellChange(order.id, 'nn_fee', Number(e.target.value))}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200 text-right font-medium">
+                        {new Intl.NumberFormat('vi-VN').format(getEditValue(order.id, 'total_fee', order.total_fee))}
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <div className="flex flex-col gap-0.5">
+                          <select 
+                            value={getEditValue(order.id, 'status', order.status)} 
+                            onChange={(e) => handleCellChange(order.id, 'status', e.target.value)}
+                            className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
+                          >
+                            <option value="ACTIVE">Hiệu lực</option>
+                            <option value="CANCELLED">Đã hủy</option>
+                            <option value="NEEDS_PROCESSING">Cần xử lý</option>
+                          </select>
+                          {getEditValue(order.id, 'status', order.status) !== 'CANCELLED' && (
+                            <select 
+                              value={getEditValue(order.id, 'payment_status', order.payment_status)} 
+                              onChange={(e) => handleCellChange(order.id, 'payment_status', e.target.value)}
+                              className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
+                            >
+                              <option value="UNPAID">Chưa TT</option>
+                              <option value="PARTIAL">1 phần</option>
+                              <option value="PAID">Đã TT</option>
+                            </select>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <select 
+                          value={getEditValue(order.id, 'staff_id', order.staff_id)} 
+                          onChange={(e) => handleCellChange(order.id, 'staff_id', e.target.value)}
+                          className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
+                        >
+                          <option value="">Chưa phân công</option>
+                          {users.filter((u: any) => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER').map((u: any) => (
+                            <option key={u.id} value={u.id}>{u.fullname}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <select 
+                          value={getEditValue(order.id, 'agency_id', order.agency_id || '')} 
+                          onChange={(e) => handleCellChange(order.id, 'agency_id', e.target.value || undefined)}
+                          className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
+                        >
+                          <option value="">Không có</option>
+                          {users.filter((u: any) => u.role === 'AGENCY').map((u: any) => (
+                            <option key={u.id} value={u.id}>{u.fullname}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="text" 
+                          value={getEditValue(order.id, 'customer_phone', order.customer_phone)} 
+                          onChange={(e) => handleCellChange(order.id, 'customer_phone', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="number" 
+                          value={getEditValue(order.id, 'cod_amount', order.cod_amount)} 
+                          onChange={(e) => handleCellChange(order.id, 'cod_amount', Number(e.target.value))}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="number" 
+                          value={getEditValue(order.id, 'shipping_fee', order.shipping_fee)} 
+                          onChange={(e) => handleCellChange(order.id, 'shipping_fee', Number(e.target.value))}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="text" 
+                          value={getEditValue(order.id, 'notes', order.notes || '')} 
+                          onChange={(e) => handleCellChange(order.id, 'notes', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px]"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="text" 
+                          value={getEditValue(order.id, 'provider', order.provider)} 
+                          onChange={(e) => handleCellChange(order.id, 'provider', e.target.value)}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                        />
+                      </td>
+                      <td className="px-1 py-1 text-center sticky right-0 bg-white border-l-2 border-slate-200 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.05)] z-10">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button 
+                            onClick={() => setHistoryOrderId(order.id)}
+                            className="p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer" title="Lịch sử thay đổi"
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                          </button>
+                          {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                                  deleteOrder(order.id, user!.fullname);
+                                }
+                              }}
+                              className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
                 return (
                   <tr key={order.id} className="hover:bg-slate-50 transition-colors bg-white">
                     <td className="px-1 py-1 text-center border-r border-slate-200 w-8">
@@ -824,10 +1178,21 @@ export default function Orders() {
                         alert(`Đã copy Mã GCN: ${order.serial_number || order.id}`);
                       }}
                     >
-                      {formatSerialNumber(order.serial_number || order.id)}
+                      <div>
+                        {searchTerm ? highlightText(formatSerialNumber(order.serial_number || order.id), searchTerm) : formatSerialNumber(order.serial_number || order.id)}
+                      </div>
+                      {filterMonth === 'ALL' && order.statement_month && (
+                        <div className="text-[9px] text-slate-500 font-normal mt-0.5">
+                          BK: {order.statement_month.split('-')[1]}/{order.statement_month.split('-')[0]}
+                        </div>
+                      )}
                     </td>
-                    <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[100px]" title={order.vehicle_owner}>{order.vehicle_owner}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.license_plate || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[100px]" title={order.vehicle_owner}>
+                      {searchTerm ? highlightText(order.vehicle_owner, searchTerm) : order.vehicle_owner}
+                    </td>
+                    <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">
+                      {searchTerm ? highlightText(order.license_plate || '-', searchTerm) : (order.license_plate || '-')}
+                    </td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{format(new Date(order.issue_date), 'dd/MM/yyyy')}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{format(new Date(order.effective_date), 'dd/MM/yyyy')}</td>
                     <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.tnds_fee)}</td>
@@ -841,9 +1206,15 @@ export default function Orders() {
                         )}
                       </div>
                     </td>
-                    <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[90px]" title={staffName}>{staffName || <span className="text-red-500 font-medium">Chưa phân công</span>}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[90px]" title={agencyName}>{agencyName || <span className="text-slate-400">Không có</span>}</td>
-                    <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.customer_phone || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[90px]" title={staffName}>
+                      {searchTerm ? highlightText(staffName || 'Chưa phân công', searchTerm) : (staffName || <span className="text-red-500 font-medium">Chưa phân công</span>)}
+                    </td>
+                    <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[90px]" title={agencyName}>
+                      {searchTerm ? highlightText(agencyName || 'Không có', searchTerm) : (agencyName || <span className="text-slate-400">Không có</span>)}
+                    </td>
+                    <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">
+                      {searchTerm ? highlightText(order.customer_phone || '-', searchTerm) : (order.customer_phone || '-')}
+                    </td>
                     <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.cod_amount)}</td>
                     <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.shipping_fee)}</td>
                     <td className="px-1 py-1 border-r border-slate-200 max-w-[120px] truncate" title={order.notes}>{order.notes || <span className="text-slate-400">-</span>}</td>
@@ -855,12 +1226,6 @@ export default function Orders() {
                           className="p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer" title="Lịch sử thay đổi"
                         >
                           <Clock className="w-3.5 h-3.5" />
-                        </button>
-                        <button 
-                          onClick={() => handleOpenModal(order)}
-                          className="p-1 text-slate-400 hover:text-blue-600 transition-colors cursor-pointer" title="Sửa"
-                        >
-                          <Edit className="w-3.5 h-3.5" />
                         </button>
                         {order.status === 'ACTIVE' ? (
                           <button 
@@ -877,16 +1242,18 @@ export default function Orders() {
                             <Plus className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        <button 
-                          onClick={() => {
-                            if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
-                              deleteOrder(order.id, user!.fullname);
-                            }
-                          }}
-                          className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+                          <button 
+                            onClick={() => {
+                              if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                                deleteOrder(order.id, user!.fullname);
+                              }
+                            }}
+                            className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -908,12 +1275,7 @@ export default function Orders() {
         />
       )}
 
-      {cancellingOrderId && (
-        <CancelReasonModal 
-          onClose={() => setCancellingOrderId(null)} 
-          onConfirm={confirmCancel} 
-        />
-      )}
+
 
       {historyOrderId && (
         <OrderHistoryModal 
@@ -1226,52 +1588,7 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
   );
 }
 
-function CancelReasonModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: (reason: string) => void }) {
-  const [reason, setReason] = useState('');
-  
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!reason.trim()) {
-      alert('Vui lòng nhập lý do hủy');
-      return;
-    }
-    onConfirm(reason);
-  };
 
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[60]">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-        <div className="flex items-center justify-between p-6 border-b border-slate-200">
-          <h2 className="text-lg font-semibold text-slate-800">Lý do hủy thẻ bảo hiểm</h2>
-          <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Nhập lý do hủy thẻ <span className="text-red-500">*</span></label>
-            <textarea
-              required
-              rows={3}
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Nhập lý do chi tiết..."
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-            />
-          </div>
-          <div className="flex justify-end gap-3 pt-4 border-t">
-            <button type="button" onClick={onClose} className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50">
-              Quay lại
-            </button>
-            <button type="submit" className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
-              Xác nhận hủy
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
 
 function OrderHistoryModal({ orderId, onClose, changeLogs, orders }: { orderId: string; onClose: () => void; changeLogs: ChangeLog[]; orders: InsuranceOrder[] }) {
   const order = orders.find(o => o.id === orderId);
@@ -1432,10 +1749,7 @@ function SystemHistoryModal({ onClose, changeLogs }: { onClose: () => void; chan
 
 function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previewData: { newOrders: any[], warnings: any[] }; onClose: () => void; onConfirm: (finalOrders: any[]) => void; users: User[] }) {
   const [orders, setOrders] = useState<any[]>(previewData.newOrders);
-  const [statementMonth, setStatementMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [statementMonth, setStatementMonth] = useState("");
 
   const monthOptions = useMemo(() => {
     const options = [];
@@ -1458,6 +1772,10 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
   };
 
   const handleConfirm = () => {
+    if (!statementMonth) {
+      alert("Vui lòng chọn Bảng kê theo Tháng trước khi import!");
+      return;
+    }
     const finalized = orders.map(o => ({
       ...o,
       statement_month: statementMonth
@@ -1489,6 +1807,7 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
               onChange={(e) => setStatementMonth(e.target.value)}
               className="border border-slate-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium text-slate-700 min-w-[200px]"
             >
+              <option value="" disabled>-- Chọn Bảng kê Tháng --</option>
               {monthOptions.map(opt => (
                 <option key={opt.key} value={opt.key}>{opt.label}</option>
               ))}
