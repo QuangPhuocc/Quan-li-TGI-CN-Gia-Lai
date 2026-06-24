@@ -174,14 +174,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Optimistic UI updates
     setOrders(prev => {
       const updated = [...prev];
+      const toAdd: InsuranceOrder[] = [];
       newOrders.forEach(no => {
         const idx = updated.findIndex(o => o.id === no.id || (o.serial_number && o.serial_number === no.serial_number));
         if (idx > -1) {
           updated[idx] = { ...updated[idx], ...no, updated_at: new Date().toISOString() };
         } else {
-          updated.unshift(no);
+          toAdd.push(no);
         }
       });
+      updated.unshift(...toAdd);
       return updated;
     });
     setChangeLogs(prev => [...logs, ...prev]);

@@ -162,14 +162,16 @@ app.post('/api/orders/bulk', (req, res) => {
   const currentLogs = readLogs();
   
   const updated = [...orders];
+  const toAdd: InsuranceOrder[] = [];
   newOrders.forEach((no: InsuranceOrder) => {
     const idx = updated.findIndex(o => o.id === no.id || (o.serial_number && o.serial_number === no.serial_number));
     if (idx > -1) {
       updated[idx] = { ...updated[idx], ...no, updated_at: new Date().toISOString() };
     } else {
-      updated.unshift(no);
+      toAdd.push(no);
     }
   });
+  updated.unshift(...toAdd);
 
   const mergedLogs = [...logs, ...currentLogs];
   
