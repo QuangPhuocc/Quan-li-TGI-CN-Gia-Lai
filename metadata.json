@@ -1,0 +1,6 @@
+{
+  "name": "InsurePro",
+  "description": "Hệ thống quản lý doanh thu và cấp đơn bảo hiểm (TNDS, Vật chất xe, Y tế...) theo mô hình quản lý phân cấp thời gian thực.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

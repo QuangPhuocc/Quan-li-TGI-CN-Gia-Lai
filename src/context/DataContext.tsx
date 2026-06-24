@@ -1,0 +1,256 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { InsuranceOrder, User, ChangeLog } from '../types';
+
+interface DataContextType {
+  orders: InsuranceOrder[];
+  users: User[];
+  changeLogs: ChangeLog[];
+  addOrder: (order: InsuranceOrder, userFullname: string) => void;
+  updateOrder: (id: string, updates: Partial<InsuranceOrder>, userFullname: string, detailMsg?: string) => void;
+  importOrders: (newOrders: InsuranceOrder[], logs: ChangeLog[]) => void;
+  addUser: (user: User) => void;
+  updateUser: (id: string, updates: Partial<User>) => void;
+  deleteUser: (id: string) => void;
+}
+
+const DataContext = createContext<DataContextType | undefined>(undefined);
+
+export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [orders, setOrders] = useState<InsuranceOrder[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
+
+  // Fetch all database records from backend APIs
+  const fetchData = async () => {
+    try {
+      const [resOrders, resUsers, resLogs] = await Promise.all([
+        fetch('/api/orders').then(r => r.json()),
+        fetch('/api/users').then(r => r.json()),
+        fetch('/api/logs').then(r => r.json())
+      ]);
+      setOrders(resOrders);
+      setUsers(resUsers);
+      setChangeLogs(resLogs);
+    } catch (e) {
+      console.error('Failed to fetch data from backend server:', e);
+    }
+  };
+
+  // Subscribe to SSE event stream for cross-device real-time updates
+  useEffect(() => {
+    fetchData();
+
+    const eventSource = new EventSource('/api/events');
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'update') {
+          fetchData();
+        }
+      } catch (err) {
+        console.error('Error parsing SSE event data:', err);
+      }
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+
+  const addOrder = async (order: InsuranceOrder, userFullname: string) => {
+    const orderWithExpiry = { ...order };
+    if (!orderWithExpiry.expiration_date && orderWithExpiry.effective_date) {
+      const d = new Date(orderWithExpiry.effective_date);
+      d.setFullYear(d.getFullYear() + 1);
+      orderWithExpiry.expiration_date = d.toISOString().split('T')[0];
+    }
+
+    // Optimistic UI updates
+    setOrders(prev => [orderWithExpiry, ...prev]);
+
+    const log: ChangeLog = {
+      id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      order_id: orderWithExpiry.id,
+      serial_number: orderWithExpiry.serial_number || orderWithExpiry.id,
+      action: 'CREATE',
+      user_fullname: userFullname,
+      timestamp: new Date().toISOString(),
+      details: `Tạo thẻ bảo hiểm mới cho chủ xe ${orderWithExpiry.vehicle_owner}`
+    };
+    setChangeLogs(prev => [log, ...prev]);
+
+    try {
+      await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderWithExpiry)
+      });
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(log)
+      });
+    } catch (err) {
+      console.error('Failed to save order to server:', err);
+    }
+  };
+
+  const updateOrder = async (id: string, updates: Partial<InsuranceOrder>, userFullname: string, detailMsg?: string) => {
+    // Optimistic UI updates
+    setOrders(prev => prev.map(o => {
+      if (o.id === id) {
+        const updated = { ...o, ...updates, updated_at: new Date().toISOString() };
+        if (updates.effective_date && updates.effective_date !== o.effective_date) {
+          const d = new Date(updates.effective_date);
+          d.setFullYear(d.getFullYear() + 1);
+          updated.expiration_date = d.toISOString().split('T')[0];
+        }
+        return updated;
+      }
+      return o;
+    }));
+
+    const orig = orders.find(o => o.id === id);
+    const serial = orig?.serial_number || updates.serial_number || id;
+    
+    let actionType: ChangeLog['action'] = 'EDIT';
+    let details = detailMsg || '';
+    if (!details && orig) {
+      const changes: string[] = [];
+      if (updates.status && updates.status !== orig.status) {
+        actionType = updates.status === 'CANCELLED' ? 'CANCEL' : 'UPDATE_STATUS';
+        changes.push(`Trạng thái đơn: ${orig.status} -> ${updates.status}`);
+      }
+      if (updates.payment_status && updates.payment_status !== orig.payment_status) {
+        actionType = 'UPDATE_PAYMENT';
+        changes.push(`Thanh toán: ${orig.payment_status} -> ${updates.payment_status}`);
+      }
+      if (updates.staff_id !== undefined && updates.staff_id !== orig.staff_id) {
+        actionType = 'UPDATE_ASSIGNMENT';
+        const oldStaff = users.find(u => u.id === orig.staff_id)?.fullname || 'Chưa phân công';
+        const newStaff = users.find(u => u.id === updates.staff_id)?.fullname || 'Chưa phân công';
+        changes.push(`Nhân viên phụ trách: ${oldStaff} -> ${newStaff}`);
+      }
+      if (updates.agency_id !== undefined && updates.agency_id !== orig.agency_id) {
+        actionType = 'UPDATE_ASSIGNMENT';
+        const oldAgency = users.find(u => u.id === orig.agency_id)?.fullname || 'Không có';
+        const newAgency = users.find(u => u.id === updates.agency_id)?.fullname || 'Không có';
+        changes.push(`Đại lý phụ trách: ${oldAgency} -> ${newAgency}`);
+      }
+      if (changes.length === 0) {
+        changes.push(`Cập nhật thông tin chi tiết thẻ`);
+      }
+      details = changes.join(', ');
+    }
+
+    const log: ChangeLog = {
+      id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      order_id: id,
+      serial_number: serial,
+      action: actionType,
+      user_fullname: userFullname,
+      timestamp: new Date().toISOString(),
+      details: details
+    };
+    setChangeLogs(prev => [log, ...prev]);
+
+    try {
+      await fetch(`/api/orders/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(log)
+      });
+    } catch (err) {
+      console.error('Failed to update order on server:', err);
+    }
+  };
+
+  const importOrders = async (newOrders: InsuranceOrder[], logs: ChangeLog[]) => {
+    // Optimistic UI updates
+    setOrders(prev => {
+      const updated = [...prev];
+      newOrders.forEach(no => {
+        const idx = updated.findIndex(o => o.id === no.id || (o.serial_number && o.serial_number === no.serial_number));
+        if (idx > -1) {
+          updated[idx] = { ...updated[idx], ...no, updated_at: new Date().toISOString() };
+        } else {
+          updated.unshift(no);
+        }
+      });
+      return updated;
+    });
+    setChangeLogs(prev => [...logs, ...prev]);
+
+    try {
+      await fetch('/api/orders/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newOrders, logs })
+      });
+    } catch (err) {
+      console.error('Failed to bulk import orders on server:', err);
+    }
+  };
+
+  const addUser = async (user: User) => {
+    setUsers(prev => [...prev, user]);
+    try {
+      await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(user)
+      });
+    } catch (err) {
+      console.error('Failed to add user to server:', err);
+    }
+  };
+
+  const updateUser = async (id: string, updates: Partial<User>) => {
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, ...updates } : u));
+    try {
+      await fetch(`/api/users/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (err) {
+      console.error('Failed to update user on server:', err);
+    }
+  };
+
+  const deleteUser = async (id: string) => {
+    setUsers(prev => prev.filter(u => u.id !== id));
+    try {
+      await fetch(`/api/users/${id}`, {
+        method: 'DELETE'
+      });
+    } catch (err) {
+      console.error('Failed to delete user on server:', err);
+    }
+  };
+
+  return (
+    <DataContext.Provider value={{ 
+      orders, users, changeLogs, 
+      addOrder, updateOrder, importOrders,
+      addUser, updateUser, deleteUser 
+    }}>
+      {children}
+    </DataContext.Provider>
+  );
+};
+
+export const useData = () => {
+  const context = useContext(DataContext);
+  if (context === undefined) {
+    throw new Error('useData must be used within a DataProvider');
+  }
+  return context;
+};
+
+
