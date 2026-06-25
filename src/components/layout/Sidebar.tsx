@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { BarChart3, FileText, Users, ChevronLeft, ChevronRight } from 'lucide-react';
+import { BarChart3, FileText, Users, ChevronLeft, ChevronRight, Package, Settings } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsOpen: (val: boolean) => void }) {
@@ -82,6 +82,38 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsO
           >
             <Users className="w-5 h-5 flex-shrink-0" />
             {isOpen && <span>Tài Khoản</span>}
+          </NavLink>
+        )}
+        {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+          <NavLink
+            to="/batches"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-colors",
+                isActive ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                isOpen ? "justify-start gap-3" : "justify-center"
+              )
+            }
+            title="Bảng kê"
+          >
+            <Package className="w-5 h-5 flex-shrink-0" />
+            {isOpen && <span>Bảng kê</span>}
+          </NavLink>
+        )}
+        {user?.role === 'MASTER' && (
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-colors",
+                isActive ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                isOpen ? "justify-start gap-3" : "justify-center"
+              )
+            }
+            title="Cấu hình"
+          >
+            <Settings className="w-5 h-5 flex-shrink-0" />
+            {isOpen && <span>Cấu hình</span>}
           </NavLink>
         )}
         {(user?.role === 'ACCOUNTANT' || user?.role === 'STAFF' || user?.role === 'CTV') && (

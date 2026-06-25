@@ -68,7 +68,9 @@ export default function Dashboard() {
       unpaid: s.debt,
       unpaidList: s.unpaidList || [],
       cancelledList: s.cancelledList || [],
-      orders: s.allOrders || []
+      orders: s.allOrders || [],
+      bonusAmount: s.bonusAmount || 0,
+      bonusThreshold: s.bonusThreshold || 'Không đạt mốc'
     }));
   }, [staffReport]);
 
@@ -141,9 +143,11 @@ export default function Dashboard() {
         'Số thẻ đã hủy': s.cancelledCount,
         'Tổng phí doanh thu (đ)': s.rev,
         'Thực thu (đ)': s.collected,
-        'Công nợ chưa thu (đ)': s.unpaid
+        'Công nợ chưa thu (đ)': s.unpaid,
+        'Thưởng doanh số (đ)': s.bonusAmount,
+        'Mốc thưởng đạt được': s.bonusThreshold
       }));
-      filename = 'Bao_Cao_Doanh_Thu_Nhan_Vien';
+      filename = 'Bao_Cao_Doanh_Thu_Thong_Ke_Nhan_Vien';
     } else if (tab === 'AGENCY') {
       dataToExport = agencyReportData.map((a, idx) => ({
         'STT': idx + 1,
@@ -388,6 +392,90 @@ export default function Dashboard() {
         <StatCard title="Đơn sắp hết hạn (<30 ngày)" value={stats.renewalCount} icon={<TrendingUp className="text-emerald-600" />} bg="bg-emerald-50" />
       </div>
 
+      {/* Batch and Quality Overview for Master/Accountant */}
+      {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Data Quality Card */}
+          {dashboardStats?.dataQuality && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+              <div>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Chất lượng dữ liệu DB</h3>
+                <div className="flex justify-between items-baseline mb-2">
+                  <span className="text-3xl font-extrabold text-slate-900">{dashboardStats.dataQuality.completion_rate}%</span>
+                  <span className="text-xs text-slate-500 font-medium">Hoàn thiện ({dashboardStats.dataQuality.total} đơn)</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2 mb-4">
+                  <div 
+                    className={`h-2 rounded-full ${
+                      dashboardStats.dataQuality.completion_rate >= 90 ? 'bg-emerald-500' :
+                      dashboardStats.dataQuality.completion_rate >= 60 ? 'bg-amber-500' : 'bg-rose-500'
+                    }`} 
+                    style={{ width: `${dashboardStats.dataQuality.completion_rate}%` }}
+                  ></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="flex justify-between border-b border-slate-100 pb-1">
+                    <span className="text-slate-500">Thiếu Người cấp:</span>
+                    <span className="font-semibold text-rose-600">{dashboardStats.dataQuality.missing_staff}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 pb-1">
+                    <span className="text-slate-500">Thiếu Đại lý:</span>
+                    <span className="font-semibold text-rose-600">{dashboardStats.dataQuality.missing_agency}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 pb-1">
+                    <span className="text-slate-500">Thiếu SĐT:</span>
+                    <span className="font-semibold text-rose-600">{dashboardStats.dataQuality.missing_phone}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 pb-1">
+                    <span className="text-slate-500">Thiếu COD:</span>
+                    <span className="font-semibold text-amber-600">{dashboardStats.dataQuality.missing_cod}</span>
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => navigate('/batches')}
+                className="mt-4 w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition-colors cursor-pointer"
+              >
+                Kiểm tra chi tiết bảng kê
+              </button>
+            </div>
+          )}
+
+          {/* Batch Overview Card */}
+          {dashboardStats?.batchOverview && (
+            <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Trạng thái Bảng kê (Batch)</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl text-center">
+                    <span className="text-2xl font-bold text-amber-700">{dashboardStats.batchOverview.processing}</span>
+                    <p className="text-xs text-amber-600 mt-1 font-semibold">Đang xử lý</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl text-center">
+                    <span className="text-2xl font-bold text-emerald-700">{dashboardStats.batchOverview.complete}</span>
+                    <p className="text-xs text-emerald-600 mt-1 font-semibold">Hoàn thành</p>
+                  </div>
+                  <div className="bg-purple-50 border border-purple-100 p-4 rounded-xl text-center">
+                    <span className="text-2xl font-bold text-purple-700">{dashboardStats.batchOverview.locked}</span>
+                    <p className="text-xs text-purple-600 mt-1 font-semibold">Đã khóa chốt</p>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl text-center">
+                    <span className="text-2xl font-bold text-blue-700">{dashboardStats.batchOverview.settled}</span>
+                    <p className="text-xs text-blue-600 mt-1 font-semibold">Đã quyết toán</p>
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => navigate('/batches')}
+                className="mt-4 w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition-colors cursor-pointer"
+              >
+                Quản lý vòng đời Bảng kê
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Chart */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
@@ -540,18 +628,26 @@ export default function Dashboard() {
                   <th className="px-4 py-3 text-right">Tổng Phí Doanh thu</th>
                   <th className="px-4 py-3 text-right">Thực thu (Đã thanh toán)</th>
                   <th className="px-4 py-3 text-right">Công nợ (Chưa thanh toán)</th>
+                  <th className="px-4 py-3 text-right">Thưởng tháng này</th>
+                  <th className="px-4 py-3">Mốc đạt được</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
-                {staffReportData.map((s, idx) => (
+                {staffReport.map((s, idx) => (
                   <tr key={s.staff.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-slate-500 font-medium">{idx + 1}</td>
                     <td className="px-4 py-3 font-semibold text-slate-900">{s.staff.fullname} ({s.staff.username})</td>
-                    <td className="px-4 py-3 text-center font-semibold text-blue-600">{s.count}</td>
+                    <td className="px-4 py-3 text-center font-semibold text-blue-600">{s.activeCount}</td>
                     <td className="px-4 py-3 text-center font-medium text-red-500">{s.cancelledCount}</td>
-                    <td className="px-4 py-3 text-right font-medium text-slate-950">{formatCurrency(s.rev)}</td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-950">{formatCurrency(s.revenue)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-emerald-600">{formatCurrency(s.collected)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-amber-600">{formatCurrency(s.unpaid)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-amber-600">{formatCurrency(s.debt)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-emerald-600 whitespace-nowrap">
+                      {s.bonusAmount && s.bonusAmount > 0 ? formatCurrency(s.bonusAmount) : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 text-xs whitespace-nowrap">
+                      {s.bonusThreshold || '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

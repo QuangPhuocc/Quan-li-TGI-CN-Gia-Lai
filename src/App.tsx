@@ -10,6 +10,8 @@ import Orders from './pages/Orders';
 import Users from './pages/Users';
 import Staffs from './pages/Staffs';
 import Agencies from './pages/Agencies';
+import Batches from './pages/Batches';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
               <Route path="users" element={<Users />} />
               <Route path="staffs" element={<Staffs />} />
               <Route path="agencies" element={<Agencies />} />
+              <Route path="batches" element={<Batches />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
           </Routes>
         </AuthProvider>

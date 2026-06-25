@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { InsuranceOrder, InsuranceType, User, ChangeLog } from '../types';
-import { Plus, Search, Filter, Download, Upload, Edit, Trash, Trash2, X, Clock } from 'lucide-react';
+import { Plus, Search, Filter, Download, Upload, Edit, Trash, Trash2, X, Clock, Lock } from 'lucide-react';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 
@@ -87,7 +87,19 @@ function formatSerialNumber(val: string): string {
 
 export default function Orders() {
   const { user } = useAuth();
-  const { orders, users, changeLogs, addOrder, updateOrder, importOrders, deleteOrder, deleteOrdersBulk, updateOrdersBulk, addUser } = useData();
+  const { 
+    orders, 
+    users, 
+    changeLogs, 
+    addOrder, 
+    updateOrder, 
+    importOrders, 
+    deleteOrder, 
+    deleteOrdersBulk, 
+    updateOrdersBulk, 
+    addUser,
+    batches
+  } = useData();
   
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -103,6 +115,16 @@ export default function Orders() {
   const [filterAgency, setFilterAgency] = useState('ALL');
   const [filterInsurance, setFilterInsurance] = useState<InsuranceType>('TNDS_OTO');
   
+  // New Batch & Quality KPI Filters
+  const [filterBatch, setFilterBatch] = useState('ALL');
+  const [filterQuality, setFilterQuality] = useState('ALL');
+
+  const isOrderBatchLocked = (batchId?: string) => {
+    if (!batchId) return false;
+    const batch = batches.find(b => b.id === batchId);
+    return batch ? (batch.status === 'LOCKED' || batch.status === 'SENT_TO_INSURER' || batch.status === 'SETTLED') : false;
+  };
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<InsuranceOrder | null>(null);
 
@@ -120,13 +142,22 @@ export default function Orders() {
     const params = new URLSearchParams(window.location.search);
     const filterStatusParam = params.get('filterStatus');
     const filterPaymentParam = params.get('filterPayment');
+    const batchIdParam = params.get('batch_id');
+    const qFilterParam = params.get('q_filter');
+
     if (filterStatusParam) {
       setFilterStatus(filterStatusParam);
     }
     if (filterPaymentParam) {
       setFilterPayment(filterPaymentParam);
     }
-    if (filterStatusParam || filterPaymentParam) {
+    if (batchIdParam) {
+      setFilterBatch(batchIdParam);
+    }
+    if (qFilterParam) {
+      setFilterQuality(qFilterParam);
+    }
+    if (filterStatusParam || filterPaymentParam || batchIdParam || qFilterParam) {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
@@ -152,7 +183,7 @@ export default function Orders() {
 
   React.useEffect(() => {
     setSelectedIds([]);
-  }, [searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider, filterAgency]);
+  }, [searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider, filterAgency, filterBatch, filterQuality]);
 
   // New Upgrade states
   const [historyOrderId, setHistoryOrderId] = useState<string | null>(null);
@@ -311,6 +342,54 @@ export default function Orders() {
       result = result.filter(o => o.agency_id === filterAgency);
     }
 
+    // Filter by Batch ID
+    if (filterBatch !== 'ALL') {
+      result = result.filter(o => o.batch_id === filterBatch);
+    }
+
+    // Filter by Data Quality KPIs
+    if (filterQuality !== 'ALL') {
+      switch (filterQuality) {
+        case 'missing_staff':
+          result = result.filter(o => {
+            const staffUser = users.find(u => u.id === o.staff_id);
+            const isStaffOrCtv = staffUser && (staffUser.role === 'STAFF' || staffUser.role === 'CTV' || staffUser.role === 'ACCOUNTANT');
+            return !o.staff_id || !isStaffOrCtv;
+          });
+          break;
+        case 'missing_agency':
+          result = result.filter(o => !o.agency_id);
+          break;
+        case 'missing_phone':
+          result = result.filter(o => !o.customer_phone || !o.customer_phone.trim());
+          break;
+        case 'missing_cod':
+          result = result.filter(o => o.cod_amount === undefined || o.cod_amount === null);
+          break;
+        case 'unpaid':
+          result = result.filter(o => o.payment_status !== 'PAID');
+          break;
+        case 'incomplete':
+          result = result.filter(o => {
+            if (o.status === 'CANCELLED') return false;
+            if (o.insurance_type === 'VCX_OTO') {
+              return !o.vehicle_owner || !o.license_plate || !o.issue_date || !o.effective_date || !o.provider || !o.hinh_xe || !o.total_fee || o.vcx_nop_ve === undefined || o.vcx_nop_ve === null || o.vcx_payment === undefined || o.vcx_payment === null || o.vcx_payment === 0;
+            } else {
+              const staffUser = users.find(u => u.id === o.staff_id);
+              const isCTV = staffUser?.role === 'CTV';
+              const isStaffOrCtv = staffUser && (staffUser.role === 'STAFF' || staffUser.role === 'CTV' || staffUser.role === 'ACCOUNTANT');
+              const hasMissingStaff = !o.staff_id || !isStaffOrCtv;
+              const hasMissingPhoneOrAgency = !isCTV && !o.customer_phone && !o.agency_id;
+              const hasMissingFee = o.tnds_fee === 0 || o.total_fee === 0;
+              return hasMissingStaff || hasMissingPhoneOrAgency || hasMissingFee;
+            }
+          });
+          break;
+        default:
+          break;
+      }
+    }
+
     // Role-based data access (realtime sync logic applies here)
     if (user?.role === 'STAFF' || user?.role === 'CTV') {
       const myAgencies = users.filter(u => u.parent_id === user.id).map(u => u.id);
@@ -354,8 +433,9 @@ export default function Orders() {
 
           const oStaff = users.find(u => u.id === o.staff_id);
           const isCTV = oStaff?.role === 'CTV';
+          const isStaffOrCtv = oStaff && (oStaff.role === 'STAFF' || oStaff.role === 'CTV' || oStaff.role === 'ACCOUNTANT');
           
-          const hasMissingStaff = !o.staff_id;
+          const hasMissingStaff = !o.staff_id || !isStaffOrCtv;
           const hasMissingPhoneOrAgency = !isCTV && !o.customer_phone && !o.agency_id;
           const hasMissingFee = o.tnds_fee === 0 || o.total_fee === 0;
           
@@ -401,7 +481,7 @@ export default function Orders() {
     });
 
     return sortedResult;
-  }, [orders, user, users, searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider]);
+  }, [orders, user, users, searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider, filterAgency, filterBatch, filterQuality]);
 
   const uniqueProviders = useMemo(() => {
     const providers = new Set(orders.map(o => o.provider).filter(Boolean));
@@ -466,6 +546,11 @@ export default function Orders() {
   };
 
   const handleStatusChange = (id: string, status: 'ACTIVE' | 'CANCELLED') => {
+    const o = orders.find(ord => ord.id === id);
+    if (o && isOrderBatchLocked(o.batch_id)) {
+      alert('Không thể thay đổi trạng thái của hồ sơ thuộc bảng kê đã khóa!');
+      return;
+    }
     if (status === 'CANCELLED') {
       if (window.confirm('Bạn có chắc chắn muốn hủy thẻ này?')) {
         updateOrder(id, { 
@@ -879,7 +964,7 @@ export default function Orders() {
     reader.readAsArrayBuffer(file);
   };
 
-  const confirmImport = async (finalOrders: InsuranceOrder[]) => {
+  const confirmImport = async (finalOrders: InsuranceOrder[], batchName: string, batchMonth: string) => {
     const processedOrders = [...finalOrders];
     let currentUsers = [...users];
 
@@ -889,10 +974,12 @@ export default function Orders() {
         const existingAgency = currentUsers.find(u => u.id === o.agency_id && u.role === 'AGENCY');
         if (!existingAgency) {
           const targetParentId = o.staff_id || user!.id;
+          const parentExists = currentUsers.some(u => u.id === targetParentId && u.role !== 'AGENCY');
+          const finalParentId = parentExists ? targetParentId : user!.id;
           const agencyByName = currentUsers.find(u => 
             u.role === 'AGENCY' && 
             u.fullname.toLowerCase() === (o.agency_id as string).toLowerCase() && 
-            u.parent_id === targetParentId
+            u.parent_id === finalParentId
           );
           
           if (agencyByName) {
@@ -907,7 +994,7 @@ export default function Orders() {
               fullname: newAgencyName,
               phone: '',
               role: 'AGENCY',
-              parent_id: targetParentId,
+              parent_id: finalParentId,
               password: `${newAgencyId}@`,
               created_at: new Date().toISOString(),
               edit_history: [`Tự động tạo từ import file Excel bởi ${user!.fullname}`]
@@ -932,7 +1019,7 @@ export default function Orders() {
       details: `Import thẻ bảo hiểm từ file Excel, chủ xe: ${o.vehicle_owner}`
     }));
 
-    importOrders(processedOrders, logs);
+    importOrders(processedOrders, logs, batchName, batchMonth);
     setImportPreview(null);
     alert(`Đã import thành công ${processedOrders.length} đơn vào hệ thống!`);
   };
@@ -1060,6 +1147,29 @@ export default function Orders() {
               <option value="PARTIAL">Thanh toán 1 phần</option>
               <option value="PAID">Đã thanh toán</option>
             </select>
+            <select 
+              value={filterBatch}
+              onChange={(e) => setFilterBatch(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
+            >
+              <option value="ALL">Tất cả Bảng kê</option>
+              {batches.map(b => (
+                <option key={b.id} value={b.id}>{b.name} ({b.month})</option>
+              ))}
+            </select>
+            <select 
+              value={filterQuality}
+              onChange={(e) => setFilterQuality(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
+            >
+              <option value="ALL">Chất lượng dữ liệu</option>
+              <option value="missing_staff">Thiếu người cấp</option>
+              <option value="missing_agency">Thiếu đại lý</option>
+              <option value="missing_phone">Thiếu SĐT khách</option>
+              <option value="missing_cod">Thiếu COD</option>
+              <option value="unpaid">Chưa thanh toán</option>
+              <option value="incomplete">Chưa hoàn thiện</option>
+            </select>
             {!isEditMode ? (
               <button
                 onClick={() => {
@@ -1132,10 +1242,10 @@ export default function Orders() {
                   <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20 w-8">
                     <input 
                       type="checkbox" 
-                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.filter(o => !isOrderBatchLocked(o.batch_id)).length}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedIds(filteredOrders.map(o => o.id));
+                          setSelectedIds(filteredOrders.filter(o => !isOrderBatchLocked(o.batch_id)).map(o => o.id));
                         } else {
                           setSelectedIds([]);
                         }
@@ -1168,10 +1278,10 @@ export default function Orders() {
                   <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20 w-8">
                     <input 
                       type="checkbox" 
-                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.filter(o => !isOrderBatchLocked(o.batch_id)).length}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedIds(filteredOrders.map(o => o.id));
+                          setSelectedIds(filteredOrders.filter(o => !isOrderBatchLocked(o.batch_id)).map(o => o.id));
                         } else {
                           setSelectedIds([]);
                         }
@@ -1214,8 +1324,9 @@ export default function Orders() {
                 const foundAgency = users.find(u => u.id === order.agency_id);
                 const agencyName = foundAgency ? foundAgency.fullname : (order.agency_id || '');
                 const isCancelled = order.status === 'CANCELLED';
+                const isLocked = isOrderBatchLocked(order.batch_id);
                 
-                if (isEditMode) {
+                if (isEditMode && !isLocked) {
                   if (filterInsurance === 'VCX_OTO') {
                     const feeVal = Number(getEditValue(order.id, 'total_fee', order.total_fee));
                     const nopveVal = Number(getEditValue(order.id, 'vcx_nop_ve', order.vcx_nop_ve || 0));
@@ -1639,10 +1750,11 @@ export default function Orders() {
                   const hasPayment = (order.vcx_payment !== undefined && order.vcx_payment !== null && order.vcx_payment > 0);
 
                   return (
-                    <tr key={order.id} className={`hover:bg-slate-50 transition-colors bg-white ${isCancelled ? 'line-through text-slate-400' : ''}`}>
+                    <tr key={order.id} className={`hover:bg-slate-50 transition-colors bg-white ${isCancelled ? 'line-through text-slate-400' : ''} ${isLocked ? 'bg-slate-50 text-slate-500' : ''}`}>
                       <td className="px-1 py-1 text-center border-r border-slate-200 w-8">
                         <input 
                           type="checkbox" 
+                          disabled={isLocked}
                           checked={selectedIds.includes(order.id)}
                           onChange={(e) => {
                             if (e.target.checked) {
@@ -1651,14 +1763,19 @@ export default function Orders() {
                               setSelectedIds(prev => prev.filter(id => id !== order.id));
                             }
                           }}
-                          className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          className={`w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 ${isLocked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                         />
                       </td>
                       <td className="px-1 py-1 text-center border-r border-slate-200">{index + 1}</td>
                       <td className="px-1 py-1 border-r border-slate-200 text-center">{order.issue_date ? format(new Date(order.issue_date), 'dd/MM/yyyy') : '-'}</td>
                       <td className="px-1 py-1 border-r border-slate-200 text-center">{order.effective_date ? format(new Date(order.effective_date), 'dd/MM/yyyy') : '-'}</td>
                       <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[120px]" title={order.vehicle_owner}>
-                        {searchTerm ? highlightText(order.vehicle_owner, searchTerm) : order.vehicle_owner}
+                        <div className="flex items-center gap-1">
+                          {isLocked && <Lock className="w-3 h-3 text-slate-500 inline-block flex-shrink-0" />}
+                          <span className="truncate">
+                            {searchTerm ? highlightText(order.vehicle_owner, searchTerm) : order.vehicle_owner}
+                          </span>
+                        </div>
                       </td>
                       <td className="px-1 py-1 border-r border-slate-200 text-center font-semibold text-slate-800">
                         {searchTerm ? highlightText(order.license_plate || '-', searchTerm) : (order.license_plate || '-')}
@@ -1696,32 +1813,38 @@ export default function Orders() {
                           >
                             <Clock className="w-3.5 h-3.5" />
                           </button>
-                          {order.status === 'ACTIVE' ? (
-                            <button 
-                              onClick={() => handleStatusChange(order.id, 'CANCELLED')}
-                              className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer" title="Hủy thẻ"
-                            >
-                              <Trash className="w-3.5 h-3.5" />
-                            </button>
+                          {isLocked ? (
+                            <Lock className="w-3.5 h-3.5 text-slate-400" title="Bảng kê đã khóa" />
                           ) : (
-                            <button 
-                              onClick={() => handleStatusChange(order.id, 'ACTIVE')}
-                              className="p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer" title="Khôi phục"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
-                            <button 
-                              onClick={() => {
-                                if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
-                                  deleteOrder(order.id, user!.fullname);
-                                }
-                              }}
-                              className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <>
+                              {order.status === 'ACTIVE' ? (
+                                <button 
+                                  onClick={() => handleStatusChange(order.id, 'CANCELLED')}
+                                  className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer" title="Hủy thẻ"
+                                >
+                                  <Trash className="w-3.5 h-3.5" />
+                                </button>
+                              ) : (
+                                <button 
+                                  onClick={() => handleStatusChange(order.id, 'ACTIVE')}
+                                  className="p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer" title="Khôi phục"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+                                <button 
+                                  onClick={() => {
+                                    if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                                      deleteOrder(order.id, user!.fullname);
+                                    }
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </>
                           )}
                         </div>
                       </td>
@@ -1730,10 +1853,11 @@ export default function Orders() {
                 }
 
                 return (
-                  <tr key={order.id} className="hover:bg-slate-50 transition-colors bg-white">
+                  <tr key={order.id} className={`hover:bg-slate-50 transition-colors bg-white ${isLocked ? 'bg-slate-50 text-slate-500' : ''}`}>
                     <td className="px-1 py-1 text-center border-r border-slate-200 w-8">
                       <input 
                         type="checkbox" 
+                        disabled={isLocked}
                         checked={selectedIds.includes(order.id)}
                         onChange={(e) => {
                           if (e.target.checked) {
@@ -1742,7 +1866,7 @@ export default function Orders() {
                             setSelectedIds(prev => prev.filter(id => id !== order.id));
                           }
                         }}
-                        className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        className={`w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 ${isLocked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                       />
                     </td>
                     <td className="px-1 py-1 text-center border-r border-slate-200">{index + 1}</td>
@@ -1809,32 +1933,38 @@ export default function Orders() {
                         >
                           <Clock className="w-3.5 h-3.5" />
                         </button>
-                        {order.status === 'ACTIVE' ? (
-                          <button 
-                            onClick={() => handleStatusChange(order.id, 'CANCELLED')}
-                            className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer" title="Hủy thẻ"
-                          >
-                            <Trash className="w-3.5 h-3.5" />
-                          </button>
+                        {isLocked ? (
+                          <Lock className="w-3.5 h-3.5 text-slate-400" title="Bảng kê đã khóa" />
                         ) : (
-                          <button 
-                            onClick={() => handleStatusChange(order.id, 'ACTIVE')}
-                            className="p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer" title="Khôi phục"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
-                          <button 
-                            onClick={() => {
-                              if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
-                                deleteOrder(order.id, user!.fullname);
-                              }
-                            }}
-                            className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <>
+                            {order.status === 'ACTIVE' ? (
+                              <button 
+                                onClick={() => handleStatusChange(order.id, 'CANCELLED')}
+                                className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer" title="Hủy thẻ"
+                              >
+                                <Trash className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <button 
+                                onClick={() => handleStatusChange(order.id, 'ACTIVE')}
+                                className="p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer" title="Khôi phục"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+                              <button 
+                                onClick={() => {
+                                  if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                                    deleteOrder(order.id, user!.fullname);
+                                  }
+                                }}
+                                className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -1879,7 +2009,13 @@ export default function Orders() {
         <BatchEditModal
           onClose={() => setIsBatchEditOpen(false)}
           onSave={(updates: any) => {
-            updateOrdersBulk(selectedIds, updates, user!.fullname);
+            const activeSelectedIds = selectedIds.filter(id => {
+              const o = orders.find(ord => ord.id === id);
+              return o && !isOrderBatchLocked(o.batch_id);
+            });
+            if (activeSelectedIds.length > 0) {
+              updateOrdersBulk(activeSelectedIds, updates, user!.fullname);
+            }
             setIsBatchEditOpen(false);
             setSelectedIds([]);
           }}
@@ -1892,7 +2028,7 @@ export default function Orders() {
         <ImportPreviewModal 
           previewData={importPreview} 
           onClose={() => setImportPreview(null)} 
-          onConfirm={confirmImport} 
+          onConfirm={(finalizedOrders, batchName, batchMonth) => confirmImport(finalizedOrders, batchName, batchMonth)} 
           users={users} 
         />
       )}
@@ -2534,9 +2670,18 @@ function SystemHistoryModal({ onClose, changeLogs }: { onClose: () => void; chan
   );
 }
 
-function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previewData: { newOrders: any[], warnings: any[] }; onClose: () => void; onConfirm: (finalOrders: any[]) => void; users: User[] }) {
+function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previewData: { newOrders: any[], warnings: any[] }; onClose: () => void; onConfirm: (finalOrders: any[], batchName: string, batchMonth: string) => void; users: User[] }) {
   const [orders, setOrders] = useState<any[]>(previewData.newOrders);
-  const [statementMonth, setStatementMonth] = useState("");
+  
+  const currentMonth = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }, []);
+  const [statementMonth, setStatementMonth] = useState(currentMonth);
+
+  const dateStr = new Date().toLocaleDateString('vi-VN');
+  const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+  const [batchName, setBatchName] = useState(`Bảng kê Import ${dateStr} ${timeStr}`);
 
   const isVcx = useMemo(() => {
     return orders.some(o => o.insurance_type === 'VCX_OTO');
@@ -2567,11 +2712,15 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
       alert("Vui lòng chọn Bảng kê theo Tháng trước khi import!");
       return;
     }
+    if (!batchName.trim()) {
+      alert("Vui lòng nhập tên Bảng kê!");
+      return;
+    }
     const finalized = orders.map(o => ({
       ...o,
       statement_month: statementMonth
     }));
-    onConfirm(finalized);
+    onConfirm(finalized, batchName.trim(), statementMonth);
   };
 
   return (
@@ -2588,21 +2737,30 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50">
-          <div className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="bg-white border border-slate-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <h4 className="font-semibold text-slate-800 text-sm">Chọn Bảng kê theo Tháng</h4>
-              <p className="text-xs text-slate-500">Tất cả các thẻ trong tệp import này sẽ được lưu vào Bảng kê của tháng đã chọn.</p>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Tên Bảng kê (Batch Name)</label>
+              <input
+                type="text"
+                value={batchName}
+                onChange={(e) => setBatchName(e.target.value)}
+                placeholder="Nhập tên bảng kê..."
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium text-slate-700"
+              />
             </div>
-            <select
-              value={statementMonth}
-              onChange={(e) => setStatementMonth(e.target.value)}
-              className="border border-slate-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium text-slate-700 min-w-[200px]"
-            >
-              <option value="" disabled>-- Chọn Bảng kê Tháng --</option>
-              {monthOptions.map(opt => (
-                <option key={opt.key} value={opt.key}>{opt.label}</option>
-              ))}
-            </select>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Bảng kê theo Tháng (Batch Month)</label>
+              <select
+                value={statementMonth}
+                onChange={(e) => setStatementMonth(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium text-slate-700"
+              >
+                <option value="" disabled>-- Chọn Bảng kê Tháng --</option>
+                {monthOptions.map(opt => (
+                  <option key={opt.key} value={opt.key}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {previewData.warnings.length > 0 && (

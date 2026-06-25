@@ -5,7 +5,18 @@ import { fileURLToPath } from 'url';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { mockOrders, mockUsers } from './src/mock/data.js';
-import { InsuranceOrder, User, ChangeLog, SystemConfig } from './src/types.js';
+import { 
+  InsuranceOrder, 
+  User, 
+  ChangeLog, 
+  SystemConfig,
+  ImportBatch,
+  Provider,
+  CommissionConfig,
+  BonusConfig,
+  BatchStatus,
+  BatchQuality
+} from './src/types.js';
 
 dotenv.config();
 
@@ -26,6 +37,10 @@ const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const BATCHES_FILE = path.join(DATA_DIR, 'batches.json');
+const COMMISSION_CONFIGS_FILE = path.join(DATA_DIR, 'commission_configs.json');
+const BONUS_CONFIGS_FILE = path.join(DATA_DIR, 'bonus_configs.json');
+const PROVIDERS_FILE = path.join(DATA_DIR, 'providers.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR);
@@ -55,11 +70,105 @@ const INSURANCE_TYPE_LABELS: Record<string, string> = {
 // ═══════════════════════════════════════════════════════════
 
 /**
+ * Compute Data Quality metrics for a list of orders.
+ */
+function computeBatchQuality(batchOrders: InsuranceOrder[], users: User[]): BatchQuality {
+  let missing_staff = 0;
+  let missing_agency = 0;
+  let missing_phone = 0;
+  let missing_cod = 0;
+  let unpaid = 0;
+  let incomplete = 0;
+  const total = batchOrders.length;
+
+  batchOrders.forEach(o => {
+    if (o.status === 'CANCELLED') return;
+
+    const staffUser = users.find(u => u.id === o.staff_id);
+    const isStaffOrCtv = staffUser && (staffUser.role === 'STAFF' || staffUser.role === 'CTV' || staffUser.role === 'ACCOUNTANT');
+    if (!o.staff_id || !isStaffOrCtv) missing_staff++;
+
+    if (!o.agency_id) missing_agency++;
+    if (!o.customer_phone || !o.customer_phone.trim()) missing_phone++;
+    if (o.cod_amount === undefined || o.cod_amount === null) missing_cod++;
+    if (o.payment_status !== 'PAID') unpaid++;
+
+    // Incomplete criteria
+    let orderIncomplete = false;
+    if (o.insurance_type === 'VCX_OTO') {
+      orderIncomplete = !o.vehicle_owner || !o.license_plate || !o.issue_date || !o.effective_date || !o.provider || !o.hinh_xe || !o.total_fee || o.vcx_nop_ve === undefined || o.vcx_nop_ve === null || o.vcx_payment === undefined || o.vcx_payment === null || o.vcx_payment === 0;
+    } else {
+      const isCTV = staffUser?.role === 'CTV';
+      const hasMissingStaff = !o.staff_id || !isStaffOrCtv;
+      const hasMissingPhoneOrAgency = !isCTV && !o.customer_phone && !o.agency_id;
+      const hasMissingFee = o.tnds_fee === 0 || o.total_fee === 0;
+      orderIncomplete = hasMissingStaff || hasMissingPhoneOrAgency || hasMissingFee;
+    }
+    if (orderIncomplete) incomplete++;
+  });
+
+  const completed = total - incomplete;
+  const completion_rate = total > 0 ? Math.round((completed / total) * 100) : 100;
+
+  return {
+    missing_staff,
+    missing_agency,
+    missing_phone,
+    missing_cod,
+    unpaid,
+    incomplete,
+    total,
+    completion_rate
+  };
+}
+
+/**
+ * Resolve commission rate for a CTV based on Provider and effective date.
+ * Priority: 
+ * 1. If commission_rate is set manually on order -> use it
+ * 2. Find config in commission_configs.json for ctv_id + provider + effective date
+ * 3. Find wildcard "*" config for ctv_id + effective date
+ * 4. Fallback to 0
+ */
+function resolveCommissionRate(
+  record: InsuranceOrder,
+  users?: User[],
+  commConfigs?: CommissionConfig[]
+): number {
+  // 1. Per-order override
+  if (record.commission_rate !== undefined && record.commission_rate !== null) {
+    return record.commission_rate;
+  }
+  if (!users || !commConfigs) return 0;
+
+  // 2. Check if staff is CTV
+  const staff = users.find(u => u.id === record.staff_id);
+  if (!staff || staff.role !== 'CTV') return 0;
+  
+  // 3. Find config for CTV + provider + date
+  const now = record.issue_date || new Date().toISOString().split('T')[0];
+  const configs = commConfigs
+    .filter(c => c.ctv_id === staff.id)
+    .filter(c => c.effective_from <= now && (!c.effective_to || c.effective_to >= now))
+    .sort((a, b) => b.effective_from.localeCompare(a.effective_from)); // newest first
+  
+  // Exact provider match
+  const exact = configs.find(c => c.provider_id === record.provider);
+  if (exact) return exact.rate;
+  
+  // Wildcard match
+  const wildcard = configs.find(c => c.provider_id === '*');
+  if (wildcard) return wildcard.rate;
+  
+  return 0;
+}
+
+/**
  * Compute all derived fields for an insurance record.
  * This is the SINGLE SOURCE OF TRUTH for all calculated values.
  * Called on every CREATE, UPDATE, and IMPORT operation.
  */
-function computeDerivedFields(record: InsuranceOrder, users?: User[]): InsuranceOrder {
+function computeDerivedFields(record: InsuranceOrder, users?: User[], commConfigs?: CommissionConfig[]): InsuranceOrder {
   const r = { ...record };
 
   // 1. Handle CANCELLED status — zero out all fees
@@ -84,20 +193,15 @@ function computeDerivedFields(record: InsuranceOrder, users?: User[]): Insurance
   // 2. Base Fee (Doanh thu Hãng) = (Phí TNDS / 1.1) + LP NNTX
   r.base_fee = Math.round((r.tnds_fee / 1.1) + r.nn_fee);
 
-  // 3. Commission (Hoa hồng) — resolve default from user if not set per-record
-  if (r.commission_rate === undefined || r.commission_rate === null) {
-    if (users) {
-      const staff = users.find(u => u.id === r.staff_id);
-      if (staff?.role === 'CTV' && staff.default_commission_rate) {
-        r.commission_rate = staff.default_commission_rate;
-      }
-    }
-  }
-  const commRate = r.commission_rate || 0;
+  // 3. Resolve commission rate and compute commission amount
+  const commRate = resolveCommissionRate(r, users, commConfigs);
+  r.commission_rate = commRate; // Store resolved rate if not overridden
   r.commission_amount = Math.round(r.base_fee * commRate / 100);
 
   // 4. Nộp về (for TNDS/non-VCX)
-  // Formula: Nộp về = Tổng phí - commission_amount + Vận chuyển - COD
+  // Formula: Nộp về = ((Tổng phí - (((Phí TNDS / 1.1) + Phí NNTX) * Hoa hồng)) - COD) + Vận chuyển
+  // Since (((Phí TNDS / 1.1) + Phí NNTX) * Hoa hồng) is commission_amount:
+  // Nộp về = ((Tổng phí - commission_amount) - COD) + Vận chuyển
   if (r.insurance_type !== 'VCX_OTO') {
     r.nop_ve = Math.round(((r.total_fee - (r.commission_amount || 0)) - (r.cod_amount || 0)) + (r.shipping_fee || 0));
   }
@@ -196,8 +300,6 @@ function readConfig(): SystemConfig {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
   } catch (e) {
     return {
-      providers: [],
-      default_commission_rate: 0,
       insurance_types: ['TNDS_OTO', 'VCX_OTO', 'TNDS_XEMAY', 'Y_TE', 'ETC', 'KHAC']
     };
   }
@@ -205,6 +307,54 @@ function readConfig(): SystemConfig {
 
 function writeConfig(config: SystemConfig) {
   writeJsonAtomic(CONFIG_FILE, config);
+}
+
+function readBatches(): ImportBatch[] {
+  try {
+    return JSON.parse(fs.readFileSync(BATCHES_FILE, 'utf-8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeBatches(batches: ImportBatch[]) {
+  writeJsonAtomic(BATCHES_FILE, batches);
+}
+
+function readCommissionConfigs(): CommissionConfig[] {
+  try {
+    return JSON.parse(fs.readFileSync(COMMISSION_CONFIGS_FILE, 'utf-8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeCommissionConfigs(configs: CommissionConfig[]) {
+  writeJsonAtomic(COMMISSION_CONFIGS_FILE, configs);
+}
+
+function readBonusConfigs(): BonusConfig[] {
+  try {
+    return JSON.parse(fs.readFileSync(BONUS_CONFIGS_FILE, 'utf-8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeBonusConfigs(configs: BonusConfig[]) {
+  writeJsonAtomic(BONUS_CONFIGS_FILE, configs);
+}
+
+function readProviders(): Provider[] {
+  try {
+    return JSON.parse(fs.readFileSync(PROVIDERS_FILE, 'utf-8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeProviders(providers: Provider[]) {
+  writeJsonAtomic(PROVIDERS_FILE, providers);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -367,30 +517,104 @@ try {
       writeOrders(migratedOrders5);
       console.log(`Migration 5: Computed derived fields for ${migratedOrders5.length} records.`);
     }
+
+    // ═══════════════════════════════════════════════════════
+    // MIGRATION 6: Batch, Provider, Config & Commission transition
+    // ═══════════════════════════════════════════════════════
+    if (!fs.existsSync(BATCHES_FILE)) writeJsonAtomic(BATCHES_FILE, []);
+    if (!fs.existsSync(COMMISSION_CONFIGS_FILE)) writeJsonAtomic(COMMISSION_CONFIGS_FILE, []);
+    if (!fs.existsSync(BONUS_CONFIGS_FILE)) writeJsonAtomic(BONUS_CONFIGS_FILE, []);
+    if (!fs.existsSync(PROVIDERS_FILE)) writeJsonAtomic(PROVIDERS_FILE, []);
+
+    // Provider auto-collect
+    let providers = readProviders();
+    if (providers.length === 0) {
+      const orders = readOrders();
+      const providerSet = new Set<string>();
+      orders.forEach(o => {
+        if (o.provider && o.provider.trim()) providerSet.add(o.provider.trim());
+      });
+      ['VIỄN ĐÔNG', 'TASCO', 'PJICO', 'BẢO MINH', 'BẢO VIỆT', 'PTI', 'BSH', 'MIC'].forEach(p => providerSet.add(p));
+      providers = Array.from(providerSet).map((name, i) => ({
+        id: `p-${i + 1}`,
+        name: name,
+        is_hidden: false,
+        is_locked: false,
+        auto_collected: true,
+        created_at: new Date().toISOString()
+      }));
+      writeProviders(providers);
+      console.log(`Migration 6: Auto-collected ${providers.length} providers.`);
+    }
+
+    // Clean old config.json
+    const oldConfig = readConfig() as any;
+    if (oldConfig.providers !== undefined || oldConfig.default_commission_rate !== undefined) {
+      const newConfig: SystemConfig = {
+        insurance_types: oldConfig.insurance_types || ['TNDS_OTO', 'VCX_OTO', 'TNDS_XEMAY', 'Y_TE', 'ETC', 'KHAC'],
+        batch_auto_lock_days: oldConfig.batch_auto_lock_days
+      };
+      writeConfig(newConfig);
+      console.log('Migration 6: Cleaned old config.json fields.');
+    }
+
+    // Convert statement_months to Batches and set batch_id on orders
+    const allOrders = readOrders();
+    const allBatches = readBatches();
+    let ordersUpdated = false;
+
+    if (allBatches.length === 0 && allOrders.length > 0) {
+      const months = Array.from(new Set(allOrders.map(o => o.statement_month).filter(Boolean))) as string[];
+      const generatedBatches: ImportBatch[] = months.map((month, i) => {
+        const batchOrders = allOrders.filter(o => o.statement_month === month);
+        const [year, m] = month.split('-');
+        return {
+          id: `batch-${month}`,
+          name: `Bảng kê Tháng ${m}/${year}`,
+          month: month,
+          imported_at: new Date().toISOString(),
+          imported_by: '1', // Admin/Master
+          record_count: batchOrders.length,
+          status: 'LOCKED', // Legacy is locked
+          locked_at: new Date().toISOString(),
+          locked_by: '1',
+          notes: 'Tạo tự động từ dữ liệu lịch sử'
+        };
+      });
+
+      const updatedOrders = allOrders.map(o => {
+        if (o.statement_month && !o.batch_id) {
+          ordersUpdated = true;
+          return { ...o, batch_id: `batch-${o.statement_month}` };
+        }
+        return o;
+      });
+
+      // Update quality metrics for the generated batches
+      const usersForQual = readUsers();
+      generatedBatches.forEach(b => {
+        const bOrders = updatedOrders.filter(o => o.batch_id === b.id);
+        b.quality = computeBatchQuality(bOrders, usersForQual);
+      });
+
+      writeBatches(generatedBatches);
+      if (ordersUpdated) {
+        writeOrders(updatedOrders);
+      }
+      console.log(`Migration 6: Generated ${generatedBatches.length} batches from statement_months.`);
+    }
   }
 } catch (err) {
   console.error('Failed to run database migration:', err);
 }
 
-// Initialize config.json with auto-collected providers
+// Initialize config.json with defaults if it does not exist
 if (!fs.existsSync(CONFIG_FILE)) {
-  const orders = readOrders();
-  const providerSet = new Set<string>();
-  orders.forEach(o => {
-    if (o.provider && o.provider.trim()) {
-      providerSet.add(o.provider.trim());
-    }
-  });
-  // Add known defaults
-  ['VIỄN ĐÔNG', 'TASCO', 'PJICO', 'BẢO MINH', 'BẢO VIỆT', 'PTI', 'BSH', 'MIC'].forEach(p => providerSet.add(p));
-  
   const config: SystemConfig = {
-    providers: Array.from(providerSet).sort(),
-    default_commission_rate: 0,
     insurance_types: ['TNDS_OTO', 'VCX_OTO', 'TNDS_XEMAY', 'Y_TE', 'ETC', 'KHAC']
   };
   writeConfig(config);
-  console.log('Initialized config.json with auto-collected providers.');
+  console.log('Initialized config.json.');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -435,18 +659,42 @@ app.get('/api/orders', (req, res) => {
   res.json(result);
 });
 
+function isBatchLocked(batchId?: string): boolean {
+  if (!batchId) return false;
+  const batches = readBatches();
+  const batch = batches.find(b => b.id === batchId);
+  return batch ? (batch.status === 'LOCKED' || batch.status === 'SENT_TO_INSURER' || batch.status === 'SETTLED') : false;
+}
+
 // POST /api/orders — Create a new record (server computes derived fields)
 app.post('/api/orders', (req, res) => {
   const newOrder: InsuranceOrder = req.body;
   const users = readUsers();
   const orders = readOrders();
+  const commConfigs = readCommissionConfigs();
+
+  if (isBatchLocked(newOrder.batch_id)) {
+    return res.status(403).json({ error: 'Bảng kê này đã khóa. Không thể tạo hồ sơ mới.' });
+  }
 
   // Server computes all derived fields
-  const computed = computeDerivedFields(newOrder, users);
+  const computed = computeDerivedFields(newOrder, users, commConfigs);
   if (!computed.source) computed.source = 'MANUAL_INPUT';
 
   orders.unshift(computed);
   writeOrders(orders);
+
+  // Update batch quality if order belongs to a batch
+  if (computed.batch_id) {
+    const batches = readBatches();
+    const batchIndex = batches.findIndex(b => b.id === computed.batch_id);
+    if (batchIndex !== -1) {
+      const batchOrders = orders.filter(o => o.batch_id === computed.batch_id);
+      batches[batchIndex].record_count = batchOrders.length;
+      batches[batchIndex].quality = computeBatchQuality(batchOrders, users);
+      writeBatches(batches);
+    }
+  }
 
   broadcastUpdate();
   res.status(201).json(computed);
@@ -458,76 +706,194 @@ app.put('/api/orders/:id', (req, res) => {
   const updates: Partial<InsuranceOrder> = req.body;
   const users = readUsers();
   const orders = readOrders();
+  const commConfigs = readCommissionConfigs();
 
-  let found = false;
+  const orderToEdit = orders.find(o => o.id === id);
+  if (!orderToEdit) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+
+  if (isBatchLocked(orderToEdit.batch_id) || isBatchLocked(updates.batch_id)) {
+    return res.status(403).json({ error: 'Bảng kê này đã khóa. Không thể chỉnh sửa dữ liệu.' });
+  }
+
   const updatedOrders = orders.map(o => {
     if (o.id === id) {
-      found = true;
       let merged = { ...o, ...updates, updated_at: new Date().toISOString() };
       merged = recalcExpiration(o, updates);
       merged = { ...o, ...updates, ...merged, updated_at: new Date().toISOString() };
       // Recompute all derived fields
-      return computeDerivedFields(merged, users);
+      return computeDerivedFields(merged, users, commConfigs);
     }
     return o;
   });
 
-  if (!found) {
-    return res.status(404).json({ error: 'Order not found' });
+  writeOrders(updatedOrders);
+
+  // Recalculate batch quality for the old (and potentially new) batch
+  const batches = readBatches();
+  let batchesChanged = false;
+  const affectedBatchIds = new Set<string>();
+  if (orderToEdit.batch_id) affectedBatchIds.add(orderToEdit.batch_id);
+  if (updates.batch_id) affectedBatchIds.add(updates.batch_id);
+
+  affectedBatchIds.forEach(bId => {
+    const batchIndex = batches.findIndex(b => b.id === bId);
+    if (batchIndex !== -1) {
+      const batchOrders = updatedOrders.filter(o => o.batch_id === bId);
+      batches[batchIndex].record_count = batchOrders.length;
+      batches[batchIndex].quality = computeBatchQuality(batchOrders, users);
+      batchesChanged = true;
+    }
+  });
+  if (batchesChanged) {
+    writeBatches(batches);
   }
 
-  writeOrders(updatedOrders);
   broadcastUpdate();
   res.json({ success: true });
 });
 
 // POST /api/orders/bulk — Bulk import (server computes derived fields for all)
 app.post('/api/orders/bulk', (req, res) => {
-  const { newOrders, logs } = req.body;
+  const { newOrders, logs, batchName, batchMonth } = req.body;
   const users = readUsers();
   const orders = readOrders();
   const currentLogs = readLogs();
+  const commConfigs = readCommissionConfigs();
+  const batches = readBatches();
+
+  const dateStr = new Date().toISOString();
+  const currentMonth = dateStr.split('-').slice(0, 2).join('-');
+  const determinedMonth = batchMonth || (newOrders[0]?.statement_month || currentMonth);
+  const bName = batchName || `Bảng kê Import ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN')}`;
+  const batchId = `batch-${Date.now()}`;
+
+  const newBatch: ImportBatch = {
+    id: batchId,
+    name: bName,
+    month: determinedMonth,
+    imported_at: dateStr,
+    imported_by: newOrders[0]?.created_by || '1',
+    record_count: newOrders.length,
+    status: 'PROCESSING',
+    quality: {
+      missing_staff: 0,
+      missing_agency: 0,
+      missing_phone: 0,
+      missing_cod: 0,
+      unpaid: 0,
+      incomplete: 0,
+      total: newOrders.length,
+      completion_rate: 0
+    }
+  };
 
   const updated = [...orders];
   const processedNewOrders = newOrders.map((no: InsuranceOrder) => {
     const existing = updated.find(o => o.id === no.id || (o.serial_number && o.serial_number === no.serial_number));
+    
+    // Check lock on existing order if it belongs to a locked batch
+    if (existing && isBatchLocked(existing.batch_id)) {
+      return existing; // Keep locked ones unchanged
+    }
+
     let processed = existing ? {
       ...existing,
       ...no,
       id: existing.id,
+      batch_id: existing.batch_id || batchId,
       created_at: existing.created_at,
-      updated_at: new Date().toISOString()
-    } : { ...no };
+      updated_at: dateStr
+    } : {
+      ...no,
+      batch_id: batchId,
+      created_at: dateStr,
+      updated_at: dateStr
+    };
 
-    // Server computes derived fields
-    processed = computeDerivedFields(processed, users);
+    // Auto-collect providers to providers.json
+    if (processed.provider && processed.provider.trim()) {
+      let provs = readProviders();
+      const cleanProv = processed.provider.trim();
+      const exists = provs.some(p => p.name.toUpperCase() === cleanProv.toUpperCase() || p.display_name?.toUpperCase() === cleanProv.toUpperCase());
+      if (!exists) {
+        provs.push({
+          id: `p-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          name: cleanProv,
+          is_hidden: false,
+          is_locked: false,
+          auto_collected: true,
+          created_at: dateStr
+        });
+        writeProviders(provs);
+      }
+    }
+
+    processed = computeDerivedFields(processed, users, commConfigs);
     if (!processed.source) processed.source = 'EXCEL_IMPORT';
     return processed;
   });
 
   const processedIds = new Set(processedNewOrders.map((o: any) => o.id));
   const processedSerials = new Set(processedNewOrders.map((o: any) => o.serial_number).filter(Boolean));
-  const cleanExisting = updated.filter(o => !processedIds.has(o.id) && !(o.serial_number && processedSerials.has(o.serial_number)));
+  
+  const cleanExisting = updated.filter(o => {
+    const willBeOverwritten = processedIds.has(o.id) || (o.serial_number && processedSerials.has(o.serial_number));
+    if (willBeOverwritten && isBatchLocked(o.batch_id)) {
+      return true; // Keep locked version
+    }
+    return !willBeOverwritten;
+  });
 
   const finalOrders = [...processedNewOrders, ...cleanExisting];
   const mergedLogs = [...logs, ...currentLogs];
+
+  // Calculate Batch quality for this new batch
+  const batchOrders = processedNewOrders.filter(o => o.batch_id === batchId);
+  newBatch.record_count = batchOrders.length;
+  newBatch.quality = computeBatchQuality(batchOrders, users);
+
+  batches.unshift(newBatch);
+  writeBatches(batches);
 
   writeOrders(finalOrders);
   writeLogs(mergedLogs);
 
   broadcastUpdate();
-  res.json({ success: true, count: newOrders.length });
+  res.json({ success: true, count: batchOrders.length, batchId });
 });
 
 // DELETE /api/orders/:id
 app.delete('/api/orders/:id', (req, res) => {
   const { id } = req.params;
   const orders = readOrders();
-  const filtered = orders.filter(o => o.id !== id);
-  if (filtered.length === orders.length) {
+  const users = readUsers();
+
+  const orderToDelete = orders.find(o => o.id === id);
+  if (!orderToDelete) {
     return res.status(404).json({ error: 'Order not found' });
   }
+
+  if (isBatchLocked(orderToDelete.batch_id)) {
+    return res.status(403).json({ error: 'Bảng kê này đã khóa. Không thể xóa dữ liệu.' });
+  }
+
+  const filtered = orders.filter(o => o.id !== id);
   writeOrders(filtered);
+
+  // Recalculate batch quality
+  if (orderToDelete.batch_id) {
+    const batches = readBatches();
+    const batchIndex = batches.findIndex(b => b.id === orderToDelete.batch_id);
+    if (batchIndex !== -1) {
+      const batchOrders = filtered.filter(o => o.batch_id === orderToDelete.batch_id);
+      batches[batchIndex].record_count = batchOrders.length;
+      batches[batchIndex].quality = computeBatchQuality(batchOrders, users);
+      writeBatches(batches);
+    }
+  }
+
   broadcastUpdate();
   res.json({ success: true });
 });
@@ -536,14 +902,39 @@ app.delete('/api/orders/:id', (req, res) => {
 app.post('/api/orders/bulk-delete', (req, res) => {
   const { ids, logs } = req.body;
   const orders = readOrders();
+  const users = readUsers();
   const currentLogs = readLogs();
 
   const idSet = new Set(ids);
+  const lockedOrders = orders.filter(o => idSet.has(o.id) && isBatchLocked(o.batch_id));
+  if (lockedOrders.length > 0) {
+    return res.status(403).json({ error: 'Có một số hồ sơ thuộc bảng kê đã khóa. Không thể xóa.' });
+  }
+
   const filtered = orders.filter(o => !idSet.has(o.id));
   const mergedLogs = [...logs, ...currentLogs];
 
   writeOrders(filtered);
   writeLogs(mergedLogs);
+
+  // Recompute affected batches quality
+  const batches = readBatches();
+  let batchesChanged = false;
+  const affectedBatchIds = new Set<string>();
+  orders.filter(o => idSet.has(o.id) && o.batch_id).forEach(o => affectedBatchIds.add(o.batch_id!));
+
+  affectedBatchIds.forEach(bId => {
+    const batchIndex = batches.findIndex(b => b.id === bId);
+    if (batchIndex !== -1) {
+      const batchOrders = filtered.filter(o => o.batch_id === bId);
+      batches[batchIndex].record_count = batchOrders.length;
+      batches[batchIndex].quality = computeBatchQuality(batchOrders, users);
+      batchesChanged = true;
+    }
+  });
+  if (batchesChanged) {
+    writeBatches(batches);
+  }
 
   broadcastUpdate();
   res.json({ success: true, count: ids.length });
@@ -555,8 +946,14 @@ app.post('/api/orders/bulk-update', (req, res) => {
   const users = readUsers();
   const orders = readOrders();
   const currentLogs = readLogs();
+  const commConfigs = readCommissionConfigs();
 
   const idSet = new Set(ids);
+  const lockedOrders = orders.filter(o => idSet.has(o.id) && isBatchLocked(o.batch_id));
+  if (lockedOrders.length > 0) {
+    return res.status(403).json({ error: 'Có một số hồ sơ thuộc bảng kê đã khóa. Không thể cập nhật.' });
+  }
+
   const updatedOrders = orders.map(o => {
     if (idSet.has(o.id)) {
       let merged = { ...o, ...updates, updated_at: new Date().toISOString() };
@@ -574,8 +971,7 @@ app.post('/api/orders/bulk-update', (req, res) => {
       if (merged.cod_amount > 0 && merged.insurance_type !== 'VCX_OTO') {
         merged.payment_status = 'PAID';
       }
-      // Recompute derived fields
-      return computeDerivedFields(merged, users);
+      return computeDerivedFields(merged, users, commConfigs);
     }
     return o;
   });
@@ -584,6 +980,26 @@ app.post('/api/orders/bulk-update', (req, res) => {
 
   writeOrders(updatedOrders);
   writeLogs(mergedLogs);
+
+  // Recompute affected batches quality
+  const batches = readBatches();
+  let batchesChanged = false;
+  const affectedBatchIds = new Set<string>();
+  orders.filter(o => idSet.has(o.id) && o.batch_id).forEach(o => affectedBatchIds.add(o.batch_id!));
+  if (updates.batch_id) affectedBatchIds.add(updates.batch_id);
+
+  affectedBatchIds.forEach(bId => {
+    const batchIndex = batches.findIndex(b => b.id === bId);
+    if (batchIndex !== -1) {
+      const batchOrders = updatedOrders.filter(o => o.batch_id === bId);
+      batches[batchIndex].record_count = batchOrders.length;
+      batches[batchIndex].quality = computeBatchQuality(batchOrders, users);
+      batchesChanged = true;
+    }
+  });
+  if (batchesChanged) {
+    writeBatches(batches);
+  }
 
   broadcastUpdate();
   res.json({ success: true, count: ids.length });
@@ -650,6 +1066,23 @@ app.get('/api/stats/dashboard', (req, res) => {
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
 
+  // Batch overview & Data Quality (Master/Accountant only)
+  let batchOverview: any = undefined;
+  let dataQuality: any = undefined;
+  if (role === 'MASTER' || role === 'ACCOUNTANT') {
+    const batches = readBatches();
+    batchOverview = {
+      processing: batches.filter(b => b.status === 'PROCESSING').length,
+      complete: batches.filter(b => b.status === 'COMPLETE').length,
+      locked: batches.filter(b => b.status === 'LOCKED').length,
+      settled: batches.filter(b => b.status === 'SETTLED' || b.status === 'SENT_TO_INSURER').length
+    };
+
+    // Database quality over all active records
+    const allActiveOrders = orders.filter(o => o.status === 'ACTIVE');
+    dataQuality = computeBatchQuality(allActiveOrders, users);
+  }
+
   res.json({
     totalRevenue,
     totalDebt,
@@ -657,7 +1090,9 @@ app.get('/api/stats/dashboard', (req, res) => {
     renewalCount,
     unpaidOrdersCount,
     needsProcessingCount,
-    providerChartData
+    providerChartData,
+    batchOverview,
+    dataQuality
   });
 });
 
@@ -665,6 +1100,7 @@ app.get('/api/stats/dashboard', (req, res) => {
 app.get('/api/stats/staff-report', (req, res) => {
   const orders = readOrders();
   const users = readUsers();
+  const bonusConfigs = readBonusConfigs();
 
   const staffs = users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'CTV');
   const report = staffs.map(staff => {
@@ -676,6 +1112,27 @@ app.get('/api/stats/staff-report', (req, res) => {
     const debt = activeOrders.filter(o => o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL').reduce((sum, o) => sum + o.total_fee, 0);
     const unpaidList = activeOrders.filter(o => o.payment_status === 'UNPAID');
 
+    // Calculate current monthly bonus
+    const currentMonthStr = new Date().toISOString().split('-').slice(0, 2).join('-');
+    const staffOrdersForMonth = activeOrders.filter(o => o.statement_month === currentMonthStr);
+    const monthlyRev = staffOrdersForMonth.reduce((sum, o) => sum + o.total_fee, 0);
+
+    const activeConfig = bonusConfigs.find(c => {
+      const nowStr = new Date().toISOString().split('T')[0];
+      return c.effective_from <= nowStr && (!c.effective_to || c.effective_to >= nowStr);
+    });
+
+    let bonusAmount = 0;
+    let bonusThreshold = 'Không đạt mốc';
+    if (activeConfig && activeConfig.thresholds && (staff.role === 'STAFF' || staff.role === 'ACCOUNTANT')) {
+      const sorted = [...activeConfig.thresholds].sort((a, b) => b.min_revenue - a.min_revenue);
+      const matched = sorted.find(t => monthlyRev >= t.min_revenue);
+      if (matched) {
+        bonusAmount = matched.bonus_amount;
+        bonusThreshold = `Doanh số ≥ ${matched.min_revenue.toLocaleString('vi-VN')} VNĐ`;
+      }
+    }
+
     return {
       staff,
       activeCount: activeOrders.length,
@@ -685,7 +1142,9 @@ app.get('/api/stats/staff-report', (req, res) => {
       debt,
       unpaidList,
       cancelledList: cancelledOrders,
-      allOrders: sOrders
+      allOrders: sOrders,
+      bonusAmount,
+      bonusThreshold
     };
   });
 
@@ -922,6 +1381,396 @@ app.post('/api/logs', (req, res) => {
 
   broadcastUpdate();
   res.status(201).json(newLog);
+});
+
+function recomputeAllAffectedOrders() {
+  const orders = readOrders();
+  const users = readUsers();
+  const commConfigs = readCommissionConfigs();
+  const batches = readBatches();
+
+  let changed = false;
+  const updated = orders.map(o => {
+    if (isBatchLocked(o.batch_id)) return o;
+    const resolved = computeDerivedFields(o, users, commConfigs);
+    if (resolved.commission_rate !== o.commission_rate || 
+        resolved.commission_amount !== o.commission_amount || 
+        resolved.nop_ve !== o.nop_ve || 
+        resolved.du !== o.du || 
+        resolved.debt_amount !== o.debt_amount) {
+      changed = true;
+      return resolved;
+    }
+    return o;
+  });
+
+  if (changed) {
+    writeOrders(updated);
+    let batchesChanged = false;
+    const updatedBatches = batches.map(b => {
+      const batchOrders = updated.filter(o => o.batch_id === b.id);
+      const qual = computeBatchQuality(batchOrders, users);
+      if (JSON.stringify(qual) !== JSON.stringify(b.quality)) {
+        batchesChanged = true;
+        return { ...b, record_count: batchOrders.length, quality: qual };
+      }
+      return b;
+    });
+    if (batchesChanged) {
+      writeBatches(updatedBatches);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// API: BATCHES
+// ═══════════════════════════════════════════════════════════
+
+app.get('/api/batches', (req, res) => {
+  res.json(readBatches());
+});
+
+app.get('/api/batches/:id/orders', (req, res) => {
+  const { id } = req.params;
+  const orders = readOrders().filter(o => o.batch_id === id);
+  res.json(orders);
+});
+
+app.put('/api/batches/:id', (req, res) => {
+  const { id } = req.params;
+  const { status, notes, name, month } = req.body;
+  const batches = readBatches();
+  const users = readUsers();
+  const orders = readOrders();
+
+  const index = batches.findIndex(b => b.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Batch not found' });
+  }
+
+  const oldBatch = batches[index];
+  const updatedBatch = { ...oldBatch };
+  
+  if (status) updatedBatch.status = status;
+  if (notes !== undefined) updatedBatch.notes = notes;
+  if (name) updatedBatch.name = name;
+  if (month) updatedBatch.month = month;
+
+  if (status === 'LOCKED' && oldBatch.status !== 'LOCKED') {
+    updatedBatch.locked_at = new Date().toISOString();
+    updatedBatch.locked_by = req.body.user_id || '1';
+  }
+
+  // Recalculate record count and quality
+  const batchOrders = orders.filter(o => o.batch_id === id);
+  updatedBatch.record_count = batchOrders.length;
+  updatedBatch.quality = computeBatchQuality(batchOrders, users);
+
+  batches[index] = updatedBatch;
+  writeBatches(batches);
+
+  broadcastUpdate();
+  res.json(updatedBatch);
+});
+
+app.delete('/api/batches/:id', (req, res) => {
+  const { id } = req.params;
+  const batches = readBatches();
+  const batch = batches.find(b => b.id === id);
+  if (!batch) {
+    return res.status(404).json({ error: 'Batch not found' });
+  }
+  if (batch.status === 'LOCKED' || batch.status === 'SENT_TO_INSURER' || batch.status === 'SETTLED') {
+    return res.status(403).json({ error: 'Bảng kê đã khóa, không thể xóa.' });
+  }
+
+  const updatedBatches = batches.filter(b => b.id !== id);
+  const orders = readOrders();
+  const updatedOrders = orders.filter(o => o.batch_id !== id);
+
+  writeBatches(updatedBatches);
+  writeOrders(updatedOrders);
+
+  broadcastUpdate();
+  res.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════════════════
+// API: PROVIDERS
+// ═══════════════════════════════════════════════════════════
+
+app.get('/api/providers', (req, res) => {
+  const providers = readProviders().filter(p => !p.merged_into);
+  res.json(providers);
+});
+
+app.post('/api/providers', (req, res) => {
+  const { name, display_name } = req.body;
+  const providers = readProviders();
+  
+  const cleanName = name.trim();
+  if (providers.some(p => p.name.toUpperCase() === cleanName.toUpperCase() && !p.merged_into)) {
+    return res.status(400).json({ error: 'Hãng bảo hiểm này đã tồn tại.' });
+  }
+
+  const newProvider: Provider = {
+    id: `p-${Date.now()}`,
+    name: cleanName,
+    display_name: display_name ? display_name.trim() : undefined,
+    is_hidden: false,
+    is_locked: false,
+    auto_collected: false,
+    created_at: new Date().toISOString()
+  };
+
+  providers.push(newProvider);
+  writeProviders(providers);
+
+  broadcastUpdate();
+  res.status(201).json(newProvider);
+});
+
+app.put('/api/providers/:id', (req, res) => {
+  const { id } = req.params;
+  const updates: Partial<Provider> = req.body;
+  const providers = readProviders();
+
+  const index = providers.findIndex(p => p.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Provider not found' });
+  }
+
+  providers[index] = { ...providers[index], ...updates };
+  writeProviders(providers);
+
+  recomputeAllAffectedOrders();
+
+  broadcastUpdate();
+  res.json(providers[index]);
+});
+
+app.post('/api/providers/merge', (req, res) => {
+  const { sourceId, targetId } = req.body;
+  const providers = readProviders();
+  const orders = readOrders();
+
+  const source = providers.find(p => p.id === sourceId);
+  const target = providers.find(p => p.id === targetId);
+
+  if (!source || !target) {
+    return res.status(404).json({ error: 'Source or target provider not found' });
+  }
+
+  source.merged_into = target.id;
+  source.is_hidden = true;
+
+  const targetName = target.display_name || target.name;
+  const sourceName = source.display_name || source.name;
+
+  const updatedOrders = orders.map(o => {
+    if (o.provider === sourceName || o.provider === source.name) {
+      const mergedOrder = { ...o, provider: targetName };
+      const users = readUsers();
+      const commConfigs = readCommissionConfigs();
+      return computeDerivedFields(mergedOrder, users, commConfigs);
+    }
+    return o;
+  });
+
+  writeProviders(providers);
+  writeOrders(updatedOrders);
+
+  // Recalculate all batch qualities
+  const batches = readBatches();
+  const users = readUsers();
+  const updatedBatches = batches.map(b => {
+    const batchOrders = updatedOrders.filter(o => o.batch_id === b.id);
+    return {
+      ...b,
+      record_count: batchOrders.length,
+      quality: computeBatchQuality(batchOrders, users)
+    };
+  });
+  writeBatches(updatedBatches);
+
+  broadcastUpdate();
+  res.json({ success: true, message: `Merged ${sourceName} into ${targetName}` });
+});
+
+// ═══════════════════════════════════════════════════════════
+// API: COMMISSION CONFIGS
+// ═══════════════════════════════════════════════════════════
+
+app.get('/api/commission-configs', (req, res) => {
+  res.json(readCommissionConfigs());
+});
+
+app.post('/api/commission-configs', (req, res) => {
+  const config: CommissionConfig = req.body;
+  const configs = readCommissionConfigs();
+
+  const newConfig: CommissionConfig = {
+    ...config,
+    id: `cc-${Date.now()}`,
+    created_at: new Date().toISOString()
+  };
+
+  configs.push(newConfig);
+  writeCommissionConfigs(configs);
+
+  recomputeAllAffectedOrders();
+
+  broadcastUpdate();
+  res.status(201).json(newConfig);
+});
+
+app.put('/api/commission-configs/:id', (req, res) => {
+  const { id } = req.params;
+  const updates: Partial<CommissionConfig> = req.body;
+  const configs = readCommissionConfigs();
+
+  const index = configs.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Config not found' });
+  }
+
+  configs[index] = { ...configs[index], ...updates };
+  writeCommissionConfigs(configs);
+
+  recomputeAllAffectedOrders();
+
+  broadcastUpdate();
+  res.json(configs[index]);
+});
+
+app.delete('/api/commission-configs/:id', (req, res) => {
+  const { id } = req.params;
+  const configs = readCommissionConfigs();
+
+  const filtered = configs.filter(c => c.id !== id);
+  if (filtered.length === configs.length) {
+    return res.status(404).json({ error: 'Config not found' });
+  }
+
+  writeCommissionConfigs(filtered);
+
+  recomputeAllAffectedOrders();
+
+  broadcastUpdate();
+  res.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════════════════
+// API: BONUS CONFIGS
+// ═══════════════════════════════════════════════════════════
+
+app.get('/api/bonus-configs', (req, res) => {
+  res.json(readBonusConfigs());
+});
+
+app.post('/api/bonus-configs', (req, res) => {
+  const config: BonusConfig = req.body;
+  const configs = readBonusConfigs();
+
+  const newConfig: BonusConfig = {
+    ...config,
+    id: `bc-${Date.now()}`,
+    created_at: new Date().toISOString()
+  };
+
+  configs.push(newConfig);
+  writeBonusConfigs(configs);
+
+  broadcastUpdate();
+  res.status(201).json(newConfig);
+});
+
+app.put('/api/bonus-configs/:id', (req, res) => {
+  const { id } = req.params;
+  const updates: Partial<BonusConfig> = req.body;
+  const configs = readBonusConfigs();
+
+  const index = configs.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Config not found' });
+  }
+
+  configs[index] = { ...configs[index], ...updates };
+  writeBonusConfigs(configs);
+
+  broadcastUpdate();
+  res.json(configs[index]);
+});
+
+app.delete('/api/bonus-configs/:id', (req, res) => {
+  const { id } = req.params;
+  const configs = readBonusConfigs();
+
+  const filtered = configs.filter(c => c.id !== id);
+  writeBonusConfigs(filtered);
+
+  broadcastUpdate();
+  res.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════════════════
+// API: BONUS REPORT
+// ═══════════════════════════════════════════════════════════
+
+app.get('/api/stats/bonus-report', (req, res) => {
+  const { month } = req.query; // YYYY-MM
+  if (!month) {
+    return res.status(400).json({ error: 'Month parameter (YYYY-MM) is required' });
+  }
+
+  const orders = readOrders();
+  const users = readUsers();
+  const bonusConfigs = readBonusConfigs();
+
+  const targetDate = `${month}-15`;
+  const activeConfig = bonusConfigs.find(c => {
+    return c.effective_from <= targetDate && (!c.effective_to || c.effective_to >= targetDate);
+  });
+
+  const staffs = users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT');
+
+  const report = staffs.map(staff => {
+    const staffOrders = orders.filter(o => {
+      return o.staff_id === staff.id && 
+             o.status === 'ACTIVE' && 
+             o.statement_month === month;
+    });
+
+    const revenue = staffOrders.reduce((sum, o) => sum + o.total_fee, 0);
+    const successCount = staffOrders.filter(o => o.payment_status === 'PAID').length;
+
+    let bonusAmount = 0;
+    let bonusThreshold = 'Không đạt mốc';
+
+    if (activeConfig && activeConfig.thresholds && activeConfig.thresholds.length > 0) {
+      const sorted = [...activeConfig.thresholds].sort((a, b) => b.min_revenue - a.min_revenue);
+      const matched = sorted.find(t => revenue >= t.min_revenue);
+      if (matched) {
+        bonusAmount = matched.bonus_amount;
+        bonusThreshold = `Doanh số ≥ ${matched.min_revenue.toLocaleString('vi-VN')} VNĐ`;
+      }
+    }
+
+    return {
+      staff,
+      revenue,
+      successCount,
+      bonusAmount,
+      bonusThreshold,
+      activeOrdersCount: staffOrders.length
+    };
+  });
+
+  res.json({
+    month,
+    configName: activeConfig ? activeConfig.name : 'Chưa cấu hình thưởng',
+    report
+  });
 });
 
 // ═══════════════════════════════════════════════════════════
