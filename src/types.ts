@@ -15,6 +15,8 @@ export interface User {
   phone: string;
   role: Role;
   parent_id?: string;
+  address?: string;
+  cccd_image?: string;
 }
 
 export type InsuranceType = 'TNDS_OTO' | 'VCX_OTO' | 'TNDS_XEMAY' | 'Y_TE' | 'ETC' | 'KHAC';

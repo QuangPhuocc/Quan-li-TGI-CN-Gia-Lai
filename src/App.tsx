@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
 import Users from './pages/Users';
 import Staffs from './pages/Staffs';
+import Agencies from './pages/Agencies';
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
               <Route path="orders" element={<Orders />} />
               <Route path="users" element={<Users />} />
               <Route path="staffs" element={<Staffs />} />
+              <Route path="agencies" element={<Agencies />} />
             </Route>
           </Routes>
         </AuthProvider>

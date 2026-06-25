@@ -61,6 +61,54 @@ if (!fs.existsSync(LOGS_FILE)) {
   writeJsonAtomic(LOGS_FILE, []);
 }
 
+// Migrate existing data if needed (e.g. from old mock users to new restructured ones)
+try {
+  if (fs.existsSync(USERS_FILE)) {
+    const existingUsers = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
+    const needsUserMigration = existingUsers.some((u: any) => ['diem', 'duythuong', 'linh', 'nhi', 'yen'].includes(u.username));
+    if (needsUserMigration) {
+      const migratedUsers = [
+        { id: '1', username: 'master', fullname: 'MASTER', phone: '', role: 'MASTER' },
+        { id: '2', username: 'diemak', fullname: 'Kiều Diễm', phone: '0981740680', role: 'ACCOUNTANT', parent_id: '1' },
+        { id: '3', username: 'nhivty', fullname: 'Yến Nhi', phone: '0931183389', role: 'STAFF', parent_id: '1' },
+        { id: '4', username: 'thuongld', fullname: 'Duy Thương', phone: '0912349681', role: 'STAFF', parent_id: '1' },
+        { id: '5', username: 'yenlt', fullname: 'Thị Yên', phone: '0942542249', role: 'STAFF', parent_id: '1' },
+        { id: '6', username: 'linhltt', fullname: 'Thuỳ Linh', phone: '0962731468', role: 'STAFF', parent_id: '1' },
+        { id: '7', username: 'phuoclq', fullname: 'Quang Phước', phone: '0906643381', role: 'STAFF', parent_id: '1' },
+        // Keep existing agency users and update their parent_ids
+        ...existingUsers.filter((u: any) => u.role === 'AGENCY').map((u: any) => {
+          let parent_id = u.parent_id;
+          if (parent_id === '2') parent_id = '2';
+          else if (parent_id === '4') parent_id = '6';
+          else if (parent_id === '5') parent_id = '3';
+          else if (parent_id === '3') parent_id = '4';
+          else if (parent_id === '8') parent_id = '5';
+          return { ...u, parent_id };
+        })
+      ];
+      writeJsonAtomic(USERS_FILE, migratedUsers);
+      console.log('Successfully migrated users.json to the new restructured accounts.');
+
+      if (fs.existsSync(ORDERS_FILE)) {
+        const existingOrders = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf-8'));
+        const migratedOrders = existingOrders.map((o: any) => {
+          let staff_id = o.staff_id;
+          if (staff_id === '2') staff_id = '2';
+          else if (staff_id === '3') staff_id = '4';
+          else if (staff_id === '4') staff_id = '6';
+          else if (staff_id === '5') staff_id = '3';
+          else if (staff_id === '8') staff_id = '5';
+          return { ...o, staff_id };
+        });
+        writeJsonAtomic(ORDERS_FILE, migratedOrders);
+        console.log('Successfully migrated orders.json staff_ids.');
+      }
+    }
+  }
+} catch (err) {
+  console.error('Failed to run database migration:', err);
+}
+
 // Read helpers and self-healing migrations
 function readOrders(): InsuranceOrder[] {
   try {

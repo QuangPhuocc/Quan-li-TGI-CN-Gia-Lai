@@ -1070,7 +1070,12 @@ export default function Orders() {
                           className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
                         >
                           <option value="">Chưa phân công</option>
-                          {users.filter((u: any) => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER').map((u: any) => (
+                          {users.filter((u: any) => {
+                            if (user?.role === 'STAFF') {
+                              return u.role === 'STAFF';
+                            }
+                            return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER';
+                          }).map((u: any) => (
                             <option key={u.id} value={u.id}>{u.fullname}</option>
                           ))}
                         </select>
@@ -1544,12 +1549,17 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
               <h3 className="font-medium text-slate-900 border-b pb-2 mt-6">Phân công & Ghi chú</h3>
               {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF') && (
                 <div className="grid grid-cols-2 gap-4">
-                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT') && (
+                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF') && (
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Nhân viên (Người cấp)</label>
                       <select name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
                         <option value="">Chọn nhân viên...</option>
-                        {users.filter((u: any) => u.role === 'STAFF').map((u: any) => (
+                        {users.filter((u: any) => {
+                          if (currentUser.role === 'STAFF') {
+                            return u.role === 'STAFF';
+                          }
+                          return u.role === 'STAFF';
+                        }).map((u: any) => (
                           <option key={u.id} value={u.id}>{u.fullname}</option>
                         ))}
                       </select>

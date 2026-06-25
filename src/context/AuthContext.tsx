@@ -28,7 +28,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(foundUser);
       localStorage.setItem('auth_user', JSON.stringify(foundUser));
     } else {
-      alert('Tài khoản không tồn tại trong dữ liệu mẫu: master, staff1, staff2, agency1, agency2, agency3');
+      alert('Tài khoản không tồn tại trong dữ liệu mẫu: master, diemak, nhivty, thuongld, yenlt, linhltt, phuoclq, chihuong');
     }
   };
 

@@ -1,16 +1,17 @@
 import { User, InsuranceOrder } from '../types';
 
 export const mockUsers: User[] = [
-  { id: '1', username: 'master', fullname: 'Giám đốc', phone: '0901000000', role: 'MASTER' },
-  { id: '2', username: 'diem', fullname: 'DIỄM', phone: '0901000001', role: 'ACCOUNTANT', parent_id: '1' },
-  { id: '3', username: 'duythuong', fullname: 'THƯƠNG', phone: '0901000002', role: 'STAFF', parent_id: '1' },
-  { id: '4', username: 'linh', fullname: 'LINH', phone: '0901000003', role: 'ACCOUNTANT', parent_id: '1' },
-  { id: '5', username: 'nhi', fullname: 'NHI', phone: '0901000004', role: 'STAFF', parent_id: '1' },
-  { id: '8', username: 'yen', fullname: 'YÊN', phone: '0901000007', role: 'STAFF', parent_id: '1' },
+  { id: '1', username: 'master', fullname: 'MASTER', phone: '', role: 'MASTER' },
+  { id: '2', username: 'diemak', fullname: 'Kiều Diễm', phone: '0981740680', role: 'ACCOUNTANT', parent_id: '1' },
+  { id: '3', username: 'nhivty', fullname: 'Yến Nhi', phone: '0931183389', role: 'STAFF', parent_id: '1' },
+  { id: '4', username: 'thuongld', fullname: 'Duy Thương', phone: '0912349681', role: 'STAFF', parent_id: '1' },
+  { id: '5', username: 'yenlt', fullname: 'Thị Yên', phone: '0942542249', role: 'STAFF', parent_id: '1' },
+  { id: '6', username: 'linhltt', fullname: 'Thuỳ Linh', phone: '0962731468', role: 'STAFF', parent_id: '1' },
+  { id: '7', username: 'phuoclq', fullname: 'Quang Phước', phone: '0906643381', role: 'STAFF', parent_id: '1' },
   
   // Agencies
-  { id: 'a1', username: 'chihuong', fullname: 'CHỊ HƯƠNG', phone: '0901000008', role: 'AGENCY', parent_id: '2' }, // DIEM
-  { id: 'a2', username: 'hdvan', fullname: 'HĐ VÂN', phone: '0901000009', role: 'AGENCY', parent_id: '4' }, // LINH
+  { id: 'a1', username: 'chihuong', fullname: 'CHỊ HƯƠNG', phone: '0901000008', role: 'AGENCY', parent_id: '2' }, // Kiều Diễm
+  { id: 'a2', username: 'hdvan', fullname: 'HĐ VÂN', phone: '0901000009', role: 'AGENCY', parent_id: '6' }, // Thuỳ Linh
 ];
 
 export const mockOrders: InsuranceOrder[] = [
@@ -26,7 +27,7 @@ export const mockOrders: InsuranceOrder[] = [
     nn_fee: 0,
     total_fee: 480700,
     provider: 'VIỄN ĐÔNG',
-    staff_id: '2', // DIỄM
+    staff_id: '2', // Kiều Diễm
     agency_id: undefined,
     customer_phone: '0972712718',
     cod_amount: 270000,
@@ -49,7 +50,7 @@ export const mockOrders: InsuranceOrder[] = [
     nn_fee: 0,
     total_fee: 480700,
     provider: 'TASCO',
-    staff_id: '3', // DUY THƯƠNG
+    staff_id: '4', // Duy Thương
     agency_id: undefined,
     customer_phone: '0356 141 067',
     cod_amount: 270000,
@@ -72,7 +73,7 @@ export const mockOrders: InsuranceOrder[] = [
     nn_fee: 70000,
     total_fee: 943400,
     provider: 'VIỄN ĐÔNG',
-    staff_id: '4', // LINH
+    staff_id: '6', // Thuỳ Linh
     agency_id: 'a2', // HĐ VÂN
     customer_phone: '0342347766',
     cod_amount: 0,
@@ -95,7 +96,7 @@ export const mockOrders: InsuranceOrder[] = [
     nn_fee: 0,
     total_fee: 0,
     provider: 'TASCO',
-    staff_id: '5', // NHI
+    staff_id: '3', // Yến Nhi
     agency_id: undefined,
     customer_phone: '0977695732',
     cod_amount: 0,

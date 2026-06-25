@@ -34,13 +34,14 @@ export default function Login() {
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               >
-                <option value="master">MASTER - Giám đốc</option>
-                <option value="diem">KẾ TOÁN - DIỄM</option>
-                <option value="linh">KẾ TOÁN - LINH</option>
-                <option value="duythuong">NHÂN VIÊN - THƯƠNG</option>
-                <option value="nhi">NHÂN VIÊN - NHI</option>
-                <option value="yen">NHÂN VIÊN - YÊN</option>
-                <option value="chihuong">ĐẠI LÝ - CHỊ HƯƠNG (DIỄM)</option>
+                <option value="master">MASTER - Ban Giám đốc</option>
+                <option value="diemak">QUẢN LÝ - Kiều Diễm</option>
+                <option value="nhivty">NHÂN VIÊN - Yến Nhi</option>
+                <option value="thuongld">NHÂN VIÊN - Duy Thương</option>
+                <option value="yenlt">NHÂN VIÊN - Thị Yên</option>
+                <option value="linhltt">NHÂN VIÊN - Thuỳ Linh</option>
+                <option value="phuoclq">NHÂN VIÊN - Quang Phước</option>
+                <option value="chihuong">ĐẠI LÝ - CHỊ HƯƠNG</option>
               </select>
               <p className="text-xs text-slate-500 mt-2">
                 * Chọn tài khoản để test phân quyền theo role.

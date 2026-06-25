@@ -84,6 +84,22 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsO
             {isOpen && <span>Tài Khoản</span>}
           </NavLink>
         )}
+        {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || user?.role === 'STAFF') && (
+          <NavLink
+            to="/agencies"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-colors",
+                isActive ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                isOpen ? "justify-start gap-3" : "justify-center"
+              )
+            }
+            title="Quản lý Đại lý"
+          >
+            <Users className="w-5 h-5 flex-shrink-0" />
+            {isOpen && <span>Quản lý Đại lý</span>}
+          </NavLink>
+        )}
       </nav>
 
       <div className="mt-auto pt-4 border-t border-slate-800 overflow-hidden">

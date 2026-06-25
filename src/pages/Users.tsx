@@ -81,7 +81,10 @@ export default function Users() {
                       u.role === 'STAFF' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
                       'bg-slate-100 text-slate-700 border border-slate-200'
                     }`}>
-                      {u.role}
+                      {u.role === 'MASTER' ? 'Master' :
+                       u.role === 'ACCOUNTANT' ? 'Quản lý' :
+                       u.role === 'STAFF' ? 'Nhân viên' :
+                       u.role === 'AGENCY' ? 'Đại lý' : u.role}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-slate-600">{u.phone}</td>
@@ -165,10 +168,10 @@ function UserModal({ user, users, onClose, onSave }: any) {
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Phân quyền <span className="text-red-500">*</span></label>
               <select name="role" value={formData.role} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
-                <option value="ACCOUNTANT">Kế toán (ACCOUNTANT)</option>
-                <option value="STAFF">Nhân viên (STAFF)</option>
-                <option value="AGENCY">Đại lý (AGENCY)</option>
-                <option value="MASTER">Giám đốc (MASTER)</option>
+                <option value="ACCOUNTANT">Quản lý (Quản lý)</option>
+                <option value="STAFF">Nhân viên (Nhân viên)</option>
+                <option value="AGENCY">Đại lý (Đại lý)</option>
+                <option value="MASTER">Master (MASTER)</option>
               </select>
             </div>
             {formData.role === 'AGENCY' && (

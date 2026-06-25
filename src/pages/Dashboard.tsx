@@ -7,6 +7,15 @@ import { InsuranceOrder, User } from '../types';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 
+const INSURANCE_TYPES = [
+  { id: 'TNDS_OTO', label: 'TNDS Ô tô' },
+  { id: 'VCX_OTO', label: 'VCX Ô tô' },
+  { id: 'TNDS_XEMAY', label: 'TNDS Xe máy' }, // capital X for consistency
+  { id: 'Y_TE', label: 'BH Y tế' },
+  { id: 'ETC', label: 'Thẻ ETC' },
+  { id: 'KHAC', label: 'Khác' }
+];
+
 const getDoanhThu = (o: InsuranceOrder) => {
   return Math.round((o.tnds_fee / 1.1) + o.nn_fee);
 };
@@ -15,6 +24,7 @@ export default function Dashboard() {
   const { user } = useAuth();
   const { orders, users } = useData();
   const [selectedStaff, setSelectedStaff] = useState<User | null>(null);
+  const [selectedType, setSelectedType] = useState('TNDS_OTO');
 
   // Active report tab based on role permissions
   const [activeReportTab, setActiveReportTab] = useState(() => {
@@ -141,45 +151,69 @@ export default function Dashboard() {
   const staffDashboardData = useMemo(() => {
     if (user?.role !== 'STAFF') return null;
     const selfOrders = orders.filter(o => o.staff_id === user.id);
-    const selfRevenue = selfOrders.filter(o => o.status === 'ACTIVE').reduce((acc, curr) => acc + getDoanhThu(curr), 0);
-    const selfUnpaid = selfOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').reduce((acc, curr) => acc + curr.total_fee, 0);
-    const selfCancelledCount = selfOrders.filter(o => o.status === 'CANCELLED').length;
-    const selfSuccessCount = selfOrders.filter(o => o.status === 'ACTIVE' && o.payment_status === 'PAID').length;
-    const selfExpiringCount = selfOrders.filter(o => {
+
+    const statsByType = INSURANCE_TYPES.map(type => {
+      const typeOrders = selfOrders.filter(o => o.insurance_type === type.id);
+      
+      const revenue = typeOrders.filter(o => o.status === 'ACTIVE').reduce((acc, curr) => acc + getDoanhThu(curr), 0);
+      const unpaid = typeOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').reduce((acc, curr) => acc + curr.total_fee, 0);
+      const cancelledCount = typeOrders.filter(o => o.status === 'CANCELLED').length;
+      const successCount = typeOrders.filter(o => o.status === 'ACTIVE' && o.payment_status === 'PAID').length;
+      const expiringCount = typeOrders.filter(o => {
+        if (o.status !== 'ACTIVE' || !o.expiration_date) return false;
+        const diffDays = Math.ceil((new Date(o.expiration_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+        return diffDays >= 0 && diffDays <= 30;
+      }).length;
+
+      // Provider Chart
+      const providerMap = new Map<string, number>();
+      typeOrders.forEach(o => {
+        if (o.status === 'CANCELLED') return;
+        const providerName = o.provider || 'Khác';
+        const rev = getDoanhThu(o);
+        providerMap.set(providerName, (providerMap.get(providerName) || 0) + rev);
+      });
+      const providerChartData = Array.from(providerMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+
+      // Ratio Chart
+      const unpaidCount = typeOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').length;
+      const ratioChartData = [
+        { name: 'Công nợ chưa thu', value: unpaidCount },
+        { name: 'Số đơn hủy', value: cancelledCount },
+        { name: 'Số đơn thành công', value: successCount }
+      ].filter(item => item.value > 0);
+
+      return {
+        id: type.id,
+        label: type.label,
+        revenue,
+        unpaid,
+        successCount,
+        cancelledCount,
+        expiringCount,
+        providerChartData,
+        ratioChartData
+      };
+    });
+
+    // Total stats for quick overview cards
+    const totalRevenue = selfOrders.filter(o => o.status === 'ACTIVE').reduce((acc, curr) => acc + getDoanhThu(curr), 0);
+    const totalUnpaid = selfOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').reduce((acc, curr) => acc + curr.total_fee, 0);
+    const totalSuccess = selfOrders.filter(o => o.status === 'ACTIVE' && o.payment_status === 'PAID').length;
+    const totalCancelled = selfOrders.filter(o => o.status === 'CANCELLED').length;
+    const totalExpiring = selfOrders.filter(o => {
       if (o.status !== 'ACTIVE' || !o.expiration_date) return false;
       const diffDays = Math.ceil((new Date(o.expiration_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
       return diffDays >= 0 && diffDays <= 30;
     }).length;
 
-    // Chart by Provider for self
-    const providerMap = new Map<string, number>();
-    selfOrders.forEach(o => {
-      if (o.status === 'CANCELLED') return;
-      const providerName = o.provider || 'Khác';
-      const rev = getDoanhThu(o);
-      providerMap.set(providerName, (providerMap.get(providerName) || 0) + rev);
-    });
-    const providerChartData = Array.from(providerMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-
-    // Unpaid, Cancelled, and Success Paid active orders count ratio
-    const unpaidCount = selfOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').length;
-    const cancelledCount = selfCancelledCount;
-    const successPaidCount = selfSuccessCount;
-
-    const ratioChartData = [
-      { name: 'Công nợ chưa thu', value: unpaidCount },
-      { name: 'Số đơn hủy', value: cancelledCount },
-      { name: 'Số đơn thành công', value: successPaidCount }
-    ].filter(item => item.value > 0);
-
     return {
-      selfRevenue,
-      selfUnpaid,
-      selfCancelledCount,
-      selfSuccessCount,
-      selfExpiringCount,
-      providerChartData,
-      ratioChartData
+      statsByType,
+      totalRevenue,
+      totalUnpaid,
+      totalSuccess,
+      totalCancelled,
+      totalExpiring
     };
   }, [orders, user]);
 
@@ -280,83 +314,146 @@ export default function Dashboard() {
   const formatCurrency = (val: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val);
 
   if (user?.role === 'STAFF' && staffDashboardData) {
+    const activeTypeStats = staffDashboardData.statsByType.find(t => t.id === selectedType) || staffDashboardData.statsByType[0];
+
     return (
       <div className="space-y-6 relative">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-slate-800">Thống kê cá nhân</h1>
-          <div className="text-sm font-medium text-slate-500">Cập nhật realtime</div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard title="Doanh thu của bản thân" value={formatCurrency(staffDashboardData.selfRevenue)} icon={<TrendingUp className="text-blue-600" />} bg="bg-blue-50" />
-          <StatCard title="Công nợ chưa thu" value={formatCurrency(staffDashboardData.selfUnpaid)} icon={<AlertCircle className="text-amber-600" />} bg="bg-amber-50" />
-          <StatCard title="Số đơn thành công" value={`${staffDashboardData.selfSuccessCount} đơn`} icon={<FileCheck className="text-emerald-600" />} bg="bg-emerald-50" />
-          <StatCard title="Số đơn hủy" value={`${staffDashboardData.selfCancelledCount} đơn`} icon={<X className="text-red-600" />} bg="bg-red-50" />
-          <StatCard title="Đơn sắp hết hạn" value={`${staffDashboardData.selfExpiringCount} đơn`} icon={<BadgeAlert className="text-amber-600" />} bg="bg-orange-50" />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Hãng Chart */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h2 className="text-lg font-medium text-slate-800 mb-4">Doanh thu theo Hãng</h2>
-            <div className="h-72 w-full">
-              {staffDashboardData.providerChartData.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-slate-500 text-sm">Không có dữ liệu</div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={staffDashboardData.providerChartData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={2}
-                    >
-                      {staffDashboardData.providerChartData.map((entry, index) => {
-                        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#6366f1'];
-                        return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
-                      })}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
-            </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">Thống kê cá nhân</h1>
+            <p className="text-sm text-slate-500 mt-1">Báo cáo hiệu quả kinh doanh của bản thân</p>
           </div>
+          <div className="text-xs font-semibold px-2.5 py-1 bg-blue-100 text-blue-800 border border-blue-200 rounded-full">
+            Cập nhật realtime
+          </div>
+        </div>
 
-          {/* Tỉ lệ Status Chart */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h2 className="text-lg font-medium text-slate-800 mb-4">Tỉ lệ Đơn hàng</h2>
-            <div className="h-72 w-full">
-              {staffDashboardData.ratioChartData.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-slate-500 text-sm">Không có dữ liệu</div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={staffDashboardData.ratioChartData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={2}
-                    >
-                      {staffDashboardData.ratioChartData.map((entry, index) => {
-                        const colors = ['#f59e0b', '#ef4444', '#10b981']; // unpaid, cancelled, success
-                        return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
-                      })}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => `${value} đơn`} />
-                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
+        {/* Tổng quan Stat Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard title="Tổng doanh thu" value={formatCurrency(staffDashboardData.totalRevenue)} icon={<TrendingUp className="text-blue-600" />} bg="bg-blue-50" />
+          <StatCard title="Tổng công nợ" value={formatCurrency(staffDashboardData.totalUnpaid)} icon={<AlertCircle className="text-amber-600" />} bg="bg-amber-50" />
+          <StatCard title="Tổng đơn thành công" value={`${staffDashboardData.totalSuccess} đơn`} icon={<FileCheck className="text-emerald-600" />} bg="bg-emerald-50" />
+          <StatCard title="Tổng đơn hủy" value={`${staffDashboardData.totalCancelled} đơn`} icon={<X className="text-red-600" />} bg="bg-red-50" />
+          <StatCard title="Tổng đơn sắp hết hạn" value={`${staffDashboardData.totalExpiring} đơn`} icon={<BadgeAlert className="text-amber-600" />} bg="bg-orange-50" />
+        </div>
+
+        {/* Bảng phân tích chi tiết theo nghiệp vụ */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+            <h3 className="font-semibold text-slate-800">Thống kê chi tiết theo Nghiệp vụ Bảo hiểm</h3>
+            <span className="text-xs text-slate-500 font-medium">* Click chọn từng dòng bên dưới để xem biểu đồ chi tiết tương ứng</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                  <th className="px-6 py-3">Loại hình bảo hiểm</th>
+                  <th className="px-6 py-3 text-right">Doanh thu (Hãng)</th>
+                  <th className="px-6 py-3 text-right">Công nợ chưa thu</th>
+                  <th className="px-6 py-3 text-center">Đơn thành công</th>
+                  <th className="px-6 py-3 text-center">Đơn hủy</th>
+                  <th className="px-6 py-3 text-center">Sắp hết hạn</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 text-sm">
+                {staffDashboardData.statsByType.map(t => (
+                  <tr 
+                    key={t.id} 
+                    onClick={() => setSelectedType(t.id)}
+                    className={`cursor-pointer transition-all ${
+                      selectedType === t.id 
+                        ? 'bg-blue-50/80 font-semibold text-blue-900 border-l-4 border-blue-600 shadow-sm' 
+                        : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <td className="px-6 py-4 pl-6 flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${selectedType === t.id ? 'bg-blue-600' : 'bg-transparent'}`}></span>
+                      {t.label}
+                    </td>
+                    <td className="px-6 py-4 text-right font-semibold text-blue-600">{formatCurrency(t.revenue)}</td>
+                    <td className="px-6 py-4 text-right text-amber-600 font-semibold">{formatCurrency(t.unpaid)}</td>
+                    <td className="px-6 py-4 text-center text-emerald-600">{t.successCount}</td>
+                    <td className="px-6 py-4 text-center text-red-500">{t.cancelledCount}</td>
+                    <td className="px-6 py-4 text-center text-orange-500 font-medium">{t.expiringCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Biểu đồ phân tích chi tiết theo loại hình được chọn */}
+        <div className="space-y-4 pt-2">
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-6 bg-blue-600 rounded-full"></div>
+            <h3 className="text-lg font-bold text-slate-800">
+              Phân tích chi tiết: {activeTypeStats.label}
+            </h3>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Hãng Chart */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col">
+              <h4 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider">Doanh thu theo Hãng</h4>
+              <div className="h-72 w-full flex-1 min-h-[280px]">
+                {activeTypeStats.providerChartData.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">Không có dữ liệu doanh thu của hãng nào</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={activeTypeStats.providerChartData}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={2}
+                      >
+                        {activeTypeStats.providerChartData.map((entry, index) => {
+                          const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#6366f1'];
+                          return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                        })}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                      <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+
+            {/* Tỉ lệ Status Chart */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col">
+              <h4 className="text-sm font-bold text-slate-700 mb-4 uppercase tracking-wider">Tỉ lệ Đơn hàng</h4>
+              <div className="h-72 w-full flex-1 min-h-[280px]">
+                {activeTypeStats.ratioChartData.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">Không có dữ liệu đơn hàng nào</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={activeTypeStats.ratioChartData}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={2}
+                      >
+                        {activeTypeStats.ratioChartData.map((entry, index) => {
+                          const colors = ['#f59e0b', '#ef4444', '#10b981']; // unpaid, cancelled, success
+                          return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                        })}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => `${value} đơn`} />
+                      <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </div>
           </div>
         </div>
