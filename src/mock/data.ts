@@ -4,7 +4,7 @@ export const mockUsers: User[] = [
   { id: '1', username: 'master', fullname: 'MASTER', phone: '', role: 'MASTER' },
   { id: '2', username: 'diemak', fullname: 'Kiều Diễm', phone: '0981740680', role: 'ACCOUNTANT', parent_id: '1' },
   { id: '3', username: 'nhivty', fullname: 'Yến Nhi', phone: '0931183389', role: 'STAFF', parent_id: '1' },
-  { id: '4', username: 'thuongld', fullname: 'Duy Thương', phone: '0912349681', role: 'STAFF', parent_id: '1' },
+  { id: '4', username: 'thuongld', fullname: 'Duy Thương', phone: '0912349681', role: 'CTV', parent_id: '1' },
   { id: '5', username: 'yenlt', fullname: 'Thị Yên', phone: '0942542249', role: 'STAFF', parent_id: '1' },
   { id: '6', username: 'linhltt', fullname: 'Thuỳ Linh', phone: '0962731468', role: 'STAFF', parent_id: '1' },
   { id: '7', username: 'phuoclq', fullname: 'Quang Phước', phone: '0906643381', role: 'STAFF', parent_id: '1' },

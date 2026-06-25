@@ -1,9 +1,10 @@
-export type Role = 'MASTER' | 'ACCOUNTANT' | 'STAFF' | 'AGENCY';
+export type Role = 'MASTER' | 'ACCOUNTANT' | 'STAFF' | 'CTV' | 'AGENCY';
 
 export const ROLE_LABELS: Record<Role, string> = {
   MASTER: 'Master',
   ACCOUNTANT: 'Quản lý',
   STAFF: 'Nhân viên',
+  CTV: 'CTV',
   AGENCY: 'Đại lý'
 };
 
@@ -42,6 +43,7 @@ export interface InsuranceOrder {
   shipping_fee: number; // VẬN CHUYỂN
   payment_status: PaymentStatus;
   status: OrderStatus;
+  commission_rate?: number; // Hoa hồng (%)
   notes?: string;
   expiration_date?: string; // Ngày hết hạn
   statement_month?: string; // Bảng kê theo Tháng (YYYY-MM)

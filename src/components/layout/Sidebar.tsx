@@ -84,7 +84,7 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsO
             {isOpen && <span>Tài Khoản</span>}
           </NavLink>
         )}
-        {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || user?.role === 'STAFF') && (
+        {(user?.role === 'ACCOUNTANT' || user?.role === 'STAFF' || user?.role === 'CTV') && (
           <NavLink
             to="/agencies"
             className={({ isActive }) =>
@@ -110,6 +110,7 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen: boolean, setIsO
               {user?.role === 'MASTER' ? 'Master' :
                user?.role === 'ACCOUNTANT' ? 'Quản lý' :
                user?.role === 'STAFF' ? 'Nhân viên' :
+               user?.role === 'CTV' ? 'CTV' :
                user?.role === 'AGENCY' ? 'Đại lý' : user?.role}
             </p>
           )}

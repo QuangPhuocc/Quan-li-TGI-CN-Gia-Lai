@@ -37,11 +37,10 @@ export default function Login() {
                 <option value="master">MASTER - Ban Giám đốc</option>
                 <option value="diemak">QUẢN LÝ - Kiều Diễm</option>
                 <option value="nhivty">NHÂN VIÊN - Yến Nhi</option>
-                <option value="thuongld">NHÂN VIÊN - Duy Thương</option>
+                <option value="thuongld">CTV - Duy Thương</option>
                 <option value="yenlt">NHÂN VIÊN - Thị Yên</option>
                 <option value="linhltt">NHÂN VIÊN - Thuỳ Linh</option>
                 <option value="phuoclq">NHÂN VIÊN - Quang Phước</option>
-                <option value="chihuong">ĐẠI LÝ - CHỊ HƯƠNG</option>
               </select>
               <p className="text-xs text-slate-500 mt-2">
                 * Chọn tài khoản để test phân quyền theo role.

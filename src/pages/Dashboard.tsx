@@ -29,14 +29,14 @@ export default function Dashboard() {
   // Active report tab based on role permissions
   const [activeReportTab, setActiveReportTab] = useState(() => {
     if (user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') return 'STAFF';
-    if (user?.role === 'STAFF') return 'AGENCY';
+    if (user?.role === 'STAFF' || user?.role === 'CTV') return 'AGENCY';
     return 'UNPAID';
   });
 
   // Filter orders according to user roles (realtime data rules)
   const filteredOrders = useMemo(() => {
     if (user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') return orders;
-    if (user?.role === 'STAFF') {
+    if (user?.role === 'STAFF' || user?.role === 'CTV') {
       const myAgencies = users.filter(u => u.parent_id === user.id).map(u => u.id);
       return orders.filter(o => o.staff_id === user.id || (o.agency_id && myAgencies.includes(o.agency_id)));
     }
@@ -76,7 +76,7 @@ export default function Dashboard() {
 
   // Master/Accountant: Staff report
   const staffReportData = useMemo(() => {
-    const staffs = users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT');
+    const staffs = users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'CTV');
     return staffs.map(staff => {
       const sOrders = orders.filter(o => o.staff_id === staff.id);
       const activeOrders = sOrders.filter(o => o.status === 'ACTIVE');
@@ -111,7 +111,7 @@ export default function Dashboard() {
   const agencyReportData = useMemo(() => {
     const agencies = users.filter(u => u.role === 'AGENCY');
     let filteredAgencies = agencies;
-    if (user?.role === 'STAFF') {
+    if (user?.role === 'STAFF' || user?.role === 'CTV') {
       filteredAgencies = agencies.filter(a => a.parent_id === user.id);
     }
     return filteredAgencies.map(agency => {
@@ -149,7 +149,7 @@ export default function Dashboard() {
   }, [filteredOrders]);
 
   const staffDashboardData = useMemo(() => {
-    if (user?.role !== 'STAFF') return null;
+    if (user?.role !== 'STAFF' && user?.role !== 'CTV') return null;
     const selfOrders = orders.filter(o => o.staff_id === user.id);
 
     const statsByType = INSURANCE_TYPES.map(type => {
@@ -313,7 +313,7 @@ export default function Dashboard() {
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val);
 
-  if (user?.role === 'STAFF' && staffDashboardData) {
+  if ((user?.role === 'STAFF' || user?.role === 'CTV') && staffDashboardData) {
     const activeTypeStats = staffDashboardData.statsByType.find(t => t.id === selectedType) || staffDashboardData.statsByType[0];
 
     return (
@@ -572,7 +572,7 @@ export default function Dashboard() {
               Doanh thu Nhân viên
             </button>
           )}
-          {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || user?.role === 'STAFF') && (
+          {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || user?.role === 'STAFF' || user?.role === 'CTV') && (
             <button
               onClick={() => setActiveReportTab('AGENCY')}
               className={`whitespace-nowrap px-4 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
@@ -647,7 +647,7 @@ export default function Dashboard() {
             </table>
           )}
 
-          {activeReportTab === 'AGENCY' && (user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || user?.role === 'STAFF') && (
+          {activeReportTab === 'AGENCY' && (user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || user?.role === 'STAFF' || user?.role === 'CTV') && (
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b text-slate-600 font-semibold whitespace-nowrap">

@@ -101,6 +101,7 @@ export default function Orders() {
 
   const [filterMonth, setFilterMonth] = useState(defaultMonth);
   const [filterProvider, setFilterProvider] = useState('ALL');
+  const [filterAgency, setFilterAgency] = useState('ALL');
   const [filterInsurance, setFilterInsurance] = useState<InsuranceType>('TNDS_OTO');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -137,7 +138,7 @@ export default function Orders() {
 
   React.useEffect(() => {
     setSelectedIds([]);
-  }, [searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider]);
+  }, [searchTerm, filterStatus, filterPayment, filterInsurance, filterMonth, filterProvider, filterAgency]);
 
   // New Upgrade states
   const [historyOrderId, setHistoryOrderId] = useState<string | null>(null);
@@ -276,8 +277,12 @@ export default function Orders() {
       result = result.filter(o => o.provider === filterProvider);
     }
 
+    if (filterAgency !== 'ALL') {
+      result = result.filter(o => o.agency_id === filterAgency);
+    }
+
     // Role-based data access (realtime sync logic applies here)
-    if (user?.role === 'STAFF') {
+    if (user?.role === 'STAFF' || user?.role === 'CTV') {
       const myAgencies = users.filter(u => u.parent_id === user.id).map(u => u.id);
       result = result.filter(o => o.staff_id === user.id || (o.agency_id && myAgencies.includes(o.agency_id)));
     } else if (user?.role === 'AGENCY') {
@@ -302,7 +307,17 @@ export default function Orders() {
     
     if (filterStatus !== 'ALL') {
       if (filterStatus === 'NEEDS_PROCESSING') {
-        result = result.filter(o => o.status !== 'CANCELLED' && (!o.staff_id || (!o.customer_phone && !o.agency_id) || o.tnds_fee === 0 || o.total_fee === 0));
+        result = result.filter(o => {
+          if (o.status === 'CANCELLED') return false;
+          const oStaff = users.find(u => u.id === o.staff_id);
+          const isCTV = oStaff?.role === 'CTV';
+          
+          const hasMissingStaff = !o.staff_id;
+          const hasMissingPhoneOrAgency = !isCTV && !o.customer_phone && !o.agency_id;
+          const hasMissingFee = o.tnds_fee === 0 || o.total_fee === 0;
+          
+          return hasMissingStaff || hasMissingPhoneOrAgency || hasMissingFee;
+        });
       } else {
         result = result.filter(o => o.status === filterStatus);
       }
@@ -435,15 +450,28 @@ export default function Orders() {
 
   // Excel Export
   const handleExportExcel = () => {
-    if (filteredOrders.length === 0) {
+    const ordersToExport = selectedIds.length > 0 
+      ? orders.filter(o => selectedIds.includes(o.id))
+      : filteredOrders;
+
+    if (ordersToExport.length === 0) {
       alert('Không có dữ liệu để xuất Excel');
       return;
     }
 
-    const dataToExport = filteredOrders.map((o, index) => {
+    const dataToExport = ordersToExport.map((o, index) => {
       const staffName = users.find(u => u.id === o.staff_id)?.fullname || '';
       const foundAgency = users.find(u => u.id === o.agency_id);
       const agencyName = foundAgency ? foundAgency.fullname : (o.agency_id || '');
+      
+      const baseFee = o.status === 'CANCELLED' ? 0 : ((o.tnds_fee / 1.1) + o.nn_fee);
+      const commRate = o.commission_rate || 0;
+      const commAmount = baseFee * (commRate / 100);
+      const totalFeeVal = o.status === 'CANCELLED' ? 0 : o.total_fee;
+      const shippingVal = o.status === 'CANCELLED' ? 0 : o.shipping_fee;
+      const codVal = o.status === 'CANCELLED' ? 0 : o.cod_amount;
+      const nopVe = Math.round(totalFeeVal - commAmount + shippingVal - codVal);
+
       return {
         'STT': index + 1,
         'Số Seri/GCN': o.serial_number,
@@ -461,6 +489,8 @@ export default function Orders() {
         'SĐT khách': o.customer_phone,
         'COD': o.cod_amount,
         'Vận chuyển': o.shipping_fee,
+        'Hoa hồng (%)': commRate,
+        'Nộp về': nopVe,
         'Trạng thái đơn': o.status === 'ACTIVE' ? 'Hiệu lực' : 'Đã hủy',
         'Thanh toán': o.payment_status === 'PAID' ? 'Đã thanh toán' : o.payment_status === 'PARTIAL' ? 'Thanh toán 1 phần' : 'Chưa thanh toán',
         'Người hủy': o.cancelled_by || '',
@@ -624,7 +654,7 @@ export default function Orders() {
 
           // Resolve Staff Name to ID
           const staffNameVal = String(getVal('staff_id') || '').trim();
-          let staff_id = user?.role === 'STAFF' ? user.id : '';
+          let staff_id = (user?.role === 'STAFF' || user?.role === 'CTV') ? user.id : '';
           if (staffNameVal) {
             const foundStaff = users.find(u => 
               u.fullname.toLowerCase() === staffNameVal.toLowerCase() || 
@@ -811,11 +841,21 @@ export default function Orders() {
             <select 
               value={filterProvider}
               onChange={(e) => setFilterProvider(e.target.value)}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
             >
               <option value="ALL">Tất cả hãng</option>
               {uniqueProviders.map(p => (
                 <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            <select 
+              value={filterAgency}
+              onChange={(e) => setFilterAgency(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
+            >
+              <option value="ALL">Tất cả đại lý</option>
+              {users.filter(u => u.role === 'AGENCY' && (user?.role === 'MASTER' || user?.role === 'ACCOUNTANT' || u.parent_id === user?.id)).map(a => (
+                <option key={a.id} value={a.id}>{a.fullname}</option>
               ))}
             </select>
             <select 
@@ -945,6 +985,8 @@ export default function Orders() {
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">SDT</th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">COD</th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">VẬN CHUYỂN</th>
+                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HOA HỒNG (%)</th>
+                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NỘP VỀ</th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GHI CHÚ</th>
                 <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HÃNG</th>
                 <th className="px-1 py-1.5 text-center border-l-2 border-slate-300 sticky top-0 right-0 bg-sky-100 z-30 font-bold shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.1)]">Thao tác</th>
@@ -953,7 +995,7 @@ export default function Orders() {
             <tbody className="divide-y divide-slate-200 text-sm">
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={18} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={20} className="px-6 py-8 text-center text-slate-500">
                     Không tìm thấy đơn bảo hiểm nào
                   </td>
                 </tr>
@@ -1074,7 +1116,10 @@ export default function Orders() {
                             if (user?.role === 'STAFF') {
                               return u.role === 'STAFF';
                             }
-                            return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER';
+                            if (user?.role === 'CTV') {
+                              return u.role === 'CTV';
+                            }
+                            return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV';
                           }).map((u: any) => (
                             <option key={u.id} value={u.id}>{u.fullname}</option>
                           ))}
@@ -1111,10 +1156,31 @@ export default function Orders() {
                       <td className="px-1 py-0.5 border-r border-slate-200">
                         <input 
                           type="number" 
-                          value={getEditValue(order.id, 'shipping_fee', order.shipping_fee)} 
-                          onChange={(e) => handleCellChange(order.id, 'shipping_fee', Number(e.target.value))}
+                          value={getEditValue(order.id, 'commission_rate', order.commission_rate || 0)} 
+                          onChange={(e) => handleCellChange(order.id, 'commission_rate', Number(e.target.value))}
                           className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
+                          placeholder="%"
                         />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200 text-right font-medium text-slate-500 whitespace-nowrap">
+                        {new Intl.NumberFormat('vi-VN').format(
+                          (() => {
+                            const status = getEditValue(order.id, 'status', order.status);
+                            const tnds = Number(getEditValue(order.id, 'tnds_fee', order.tnds_fee));
+                            const nn = Number(getEditValue(order.id, 'nn_fee', order.nn_fee));
+                            const totalFee = Number(getEditValue(order.id, 'total_fee', order.total_fee));
+                            const shipping = Number(getEditValue(order.id, 'shipping_fee', order.shipping_fee));
+                            const cod = Number(getEditValue(order.id, 'cod_amount', order.cod_amount));
+                            const commRate = Number(getEditValue(order.id, 'commission_rate', order.commission_rate || 0));
+                            
+                            const baseFee = status === 'CANCELLED' ? 0 : ((tnds / 1.1) + nn);
+                            const commAmount = baseFee * (commRate / 100);
+                            const totalFeeVal = status === 'CANCELLED' ? 0 : totalFee;
+                            const shippingVal = status === 'CANCELLED' ? 0 : shipping;
+                            const codVal = status === 'CANCELLED' ? 0 : cod;
+                            return Math.round(totalFeeVal - commAmount + shippingVal - codVal);
+                          })()
+                        )}
                       </td>
                       <td className="px-1 py-0.5 border-r border-slate-200">
                         <input 
@@ -1222,6 +1288,22 @@ export default function Orders() {
                     </td>
                     <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.cod_amount)}</td>
                     <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(order.shipping_fee)}</td>
+                    <td className="px-1 py-1 border-r border-slate-200 text-center whitespace-nowrap">
+                      {order.commission_rate !== undefined ? `${order.commission_rate}%` : '0%'}
+                    </td>
+                    <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap font-medium text-emerald-700">
+                      {new Intl.NumberFormat('vi-VN').format(
+                        (() => {
+                          const baseFee = order.status === 'CANCELLED' ? 0 : ((order.tnds_fee / 1.1) + order.nn_fee);
+                          const commRate = order.commission_rate || 0;
+                          const commAmount = baseFee * (commRate / 100);
+                          const totalFeeVal = order.status === 'CANCELLED' ? 0 : order.total_fee;
+                          const shippingVal = order.status === 'CANCELLED' ? 0 : order.shipping_fee;
+                          const codVal = order.status === 'CANCELLED' ? 0 : order.cod_amount;
+                          return Math.round(totalFeeVal - commAmount + shippingVal - codVal);
+                        })()
+                      )} ₫
+                    </td>
                     <td className="px-1 py-1 border-r border-slate-200 max-w-[120px] truncate" title={order.notes}>{order.notes || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.provider || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 text-center sticky right-0 bg-white border-l-2 border-slate-200 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.05)] z-10">
@@ -1330,6 +1412,7 @@ function PaymentBadge({ status }: { status: string }) {
 }
 
 function StatusBadge({ status, notes, order }: { status: string, notes?: string, order?: any }) {
+  const { users } = useData();
   if (status === 'CANCELLED') {
     return (
       <div className="flex flex-col items-center gap-0.5">
@@ -1351,10 +1434,13 @@ function StatusBadge({ status, notes, order }: { status: string, notes?: string,
   // Check processing reasons for non-cancelled orders
   const reasons: string[] = [];
   if (order) {
+    const staffUser = users.find(u => u.id === order.staff_id);
+    const isCTV = staffUser?.role === 'CTV';
+
     if (!order.staff_id) {
       reasons.push("Chưa điền Người cấp");
     }
-    if (!order.customer_phone && !order.agency_id) {
+    if (!isCTV && !order.customer_phone && !order.agency_id) {
       reasons.push("Chưa điền Đại lý/SDT");
     }
     if (order.tnds_fee === 0 || order.total_fee === 0) {
@@ -1401,11 +1487,12 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
     nn_fee: order?.nn_fee || 0,
     total_fee: order?.total_fee || 0,
     provider: order?.provider || '',
-    staff_id: order?.staff_id || (currentUser.role === 'STAFF' ? currentUser.id : ''),
+    staff_id: order?.staff_id || ((currentUser.role === 'STAFF' || currentUser.role === 'CTV') ? currentUser.id : ''),
     agency_id: order?.agency_id || (currentUser.role === 'AGENCY' ? currentUser.id : ''),
     customer_phone: order?.customer_phone || '',
     cod_amount: order?.cod_amount || 0,
     shipping_fee: order?.shipping_fee || 0,
+    commission_rate: order?.commission_rate || 0,
     payment_status: order?.payment_status || 'UNPAID',
     status: order?.status || 'ACTIVE',
     notes: order?.notes || '',
@@ -1415,7 +1502,7 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
     const { name, value } = e.target;
     let newValue: any = value;
     
-    if (['tnds_fee', 'nn_fee', 'cod_amount', 'shipping_fee'].includes(name)) {
+    if (['tnds_fee', 'nn_fee', 'cod_amount', 'shipping_fee', 'commission_rate'].includes(name)) {
       newValue = Number(value);
     }
     
@@ -1535,21 +1622,25 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                  <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Số tiền COD</label>
                   <input type="number" name="cod_amount" value={formData.cod_amount} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
                 </div>
-                <div>
+                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Phí Vận chuyển</label>
                   <input type="number" name="shipping_fee" value={formData.shipping_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Hoa hồng (%)</label>
+                  <input type="number" name="commission_rate" value={formData.commission_rate} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="%" />
                 </div>
               </div>
 
               <h3 className="font-medium text-slate-900 border-b pb-2 mt-6">Phân công & Ghi chú</h3>
-              {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF') && (
+              {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
                 <div className="grid grid-cols-2 gap-4">
-                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF') && (
+                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Nhân viên (Người cấp)</label>
                       <select name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
@@ -1558,7 +1649,10 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
                           if (currentUser.role === 'STAFF') {
                             return u.role === 'STAFF';
                           }
-                          return u.role === 'STAFF';
+                          if (currentUser.role === 'CTV') {
+                            return u.role === 'CTV';
+                          }
+                          return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV';
                         }).map((u: any) => (
                           <option key={u.id} value={u.id}>{u.fullname}</option>
                         ))}

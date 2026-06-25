@@ -35,7 +35,7 @@ export default function Staffs() {
   }, [orders]);
 
   const staffs = useMemo(() => {
-    return users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT');
+    return users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'CTV');
   }, [users]);
 
   // Lọc orders theo tháng và loại bảo hiểm
