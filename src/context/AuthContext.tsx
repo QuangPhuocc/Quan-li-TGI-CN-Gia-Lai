@@ -1,10 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
-import { mockUsers } from '../mock/data';
 
 interface AuthContextType {
   user: User | null;
-  login: (username: string) => void;
+  login: (username: string, password?: string) => Promise<boolean>;
   logout: () => void;
 }
 
@@ -22,13 +21,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const login = (username: string) => {
-    const foundUser = mockUsers.find(u => u.username === username);
-    if (foundUser) {
-      setUser(foundUser);
-      localStorage.setItem('auth_user', JSON.stringify(foundUser));
-    } else {
-      alert('Tài khoản không tồn tại trong dữ liệu mẫu: master, diemak, nhivty, thuongld, yenlt, linhltt, phuoclq, chihuong');
+  const login = async (username: string, password?: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/users');
+      const users: User[] = await res.json();
+      const foundUser = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+      
+      if (foundUser) {
+        const expectedPassword = foundUser.password || (foundUser.phone ? `${foundUser.phone}@` : `${foundUser.username}@`);
+        if (password === expectedPassword) {
+          setUser(foundUser);
+          localStorage.setItem('auth_user', JSON.stringify(foundUser));
+          return true;
+        } else {
+          alert('Mật khẩu không chính xác!');
+          return false;
+        }
+      } else {
+        alert('Tài khoản không tồn tại trong hệ thống!');
+        return false;
+      }
+    } catch (e) {
+      console.error('Login error:', e);
+      alert('Không thể kết nối đến server!');
+      return false;
     }
   };
 

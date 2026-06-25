@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from 'recharts';
@@ -23,6 +24,7 @@ const getDoanhThu = (o: InsuranceOrder) => {
 export default function Dashboard() {
   const { user } = useAuth();
   const { orders, users } = useData();
+  const navigate = useNavigate();
   const [selectedStaff, setSelectedStaff] = useState<User | null>(null);
   const [selectedType, setSelectedType] = useState('TNDS_OTO');
 
@@ -207,13 +209,25 @@ export default function Dashboard() {
       return diffDays >= 0 && diffDays <= 30;
     }).length;
 
+    const totalUnpaidOrdersCount = selfOrders.filter(o => o.status === 'ACTIVE' && (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL')).length;
+    const totalNeedsProcessing = selfOrders.filter(o => {
+      if (o.status === 'CANCELLED') return false;
+      const isCTV = user?.role === 'CTV';
+      const hasMissingStaff = !o.staff_id;
+      const hasMissingPhoneOrAgency = !isCTV && !o.customer_phone && !o.agency_id;
+      const hasMissingFee = o.tnds_fee === 0 || o.total_fee === 0;
+      return hasMissingStaff || hasMissingPhoneOrAgency || hasMissingFee;
+    }).length;
+
     return {
       statsByType,
       totalRevenue,
       totalUnpaid,
       totalSuccess,
       totalCancelled,
-      totalExpiring
+      totalExpiring,
+      totalUnpaidOrdersCount,
+      totalNeedsProcessing
     };
   }, [orders, user]);
 
@@ -329,11 +343,12 @@ export default function Dashboard() {
         </div>
 
         {/* Tổng quan Stat Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           <StatCard title="Tổng doanh thu" value={formatCurrency(staffDashboardData.totalRevenue)} icon={<TrendingUp className="text-blue-600" />} bg="bg-blue-50" />
-          <StatCard title="Tổng công nợ" value={formatCurrency(staffDashboardData.totalUnpaid)} icon={<AlertCircle className="text-amber-600" />} bg="bg-amber-50" />
+          <StatCard title="Đơn chưa thanh toán" value={`${staffDashboardData.totalUnpaidOrdersCount} đơn`} icon={<AlertCircle className="text-amber-600" />} bg="bg-amber-50" onClick={() => navigate('/orders?filterPayment=UNPAID')} />
+          <StatCard title="Đơn cần xử lý" value={`${staffDashboardData.totalNeedsProcessing} đơn`} icon={<ShieldAlert className="text-red-600" />} bg="bg-red-50" onClick={() => navigate('/orders?filterStatus=NEEDS_PROCESSING')} />
           <StatCard title="Tổng đơn thành công" value={`${staffDashboardData.totalSuccess} đơn`} icon={<FileCheck className="text-emerald-600" />} bg="bg-emerald-50" />
-          <StatCard title="Tổng đơn hủy" value={`${staffDashboardData.totalCancelled} đơn`} icon={<X className="text-red-600" />} bg="bg-red-50" />
+          <StatCard title="Tổng đơn hủy" value={`${staffDashboardData.totalCancelled} đơn`} icon={<X className="text-red-600" />} bg="bg-rose-50" />
           <StatCard title="Tổng đơn sắp hết hạn" value={`${staffDashboardData.totalExpiring} đơn`} icon={<BadgeAlert className="text-amber-600" />} bg="bg-orange-50" />
         </div>
 
@@ -821,9 +836,14 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({ title, value, icon, bg }: { title: string, value: string | number, icon: React.ReactNode, bg: string }) {
+function StatCard({ title, value, icon, bg, onClick }: { title: string, value: string | number, icon: React.ReactNode, bg: string, onClick?: () => void }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex items-start gap-4">
+    <div 
+      onClick={onClick}
+      className={`bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex items-start gap-4 transition-all duration-200 ${
+        onClick ? 'cursor-pointer hover:shadow-md hover:border-blue-300 hover:scale-[1.02]' : ''
+      }`}
+    >
       <div className={`p-3 rounded-lg ${bg}`}>
         {icon}
       </div>

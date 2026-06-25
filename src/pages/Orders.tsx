@@ -87,7 +87,7 @@ function formatSerialNumber(val: string): string {
 
 export default function Orders() {
   const { user } = useAuth();
-  const { orders, users, changeLogs, addOrder, updateOrder, importOrders, deleteOrder, deleteOrdersBulk, updateOrdersBulk } = useData();
+  const { orders, users, changeLogs, addOrder, updateOrder, importOrders, deleteOrder, deleteOrdersBulk, updateOrdersBulk, addUser } = useData();
   
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -95,7 +95,6 @@ export default function Orders() {
   
   const defaultMonth = useMemo(() => {
     const d = new Date();
-    d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }, []);
 
@@ -116,6 +115,21 @@ export default function Orders() {
       setSelectedIds([]);
     }
   };
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const filterStatusParam = params.get('filterStatus');
+    const filterPaymentParam = params.get('filterPayment');
+    if (filterStatusParam) {
+      setFilterStatus(filterStatusParam);
+    }
+    if (filterPaymentParam) {
+      setFilterPayment(filterPaymentParam);
+    }
+    if (filterStatusParam || filterPaymentParam) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   React.useEffect(() => {
     const mainEl = document.querySelector('main');
@@ -608,6 +622,7 @@ export default function Orders() {
 
         const newOrders: any[] = [];
         const warnings: { rowIdx: number; message: string; severity: 'warning' | 'error' }[] = [];
+        const seenSerialsInExcel = new Map<string, number>();
 
         for (let i = headerIndex + 1; i < rows.length; i++) {
           const row = rows[i];
@@ -710,7 +725,7 @@ export default function Orders() {
             }
           }
 
-          newOrders.push({
+          const orderObj = {
             id: `ORD-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 5)}`,
             insurance_type,
             serial_number,
@@ -734,7 +749,30 @@ export default function Orders() {
             created_by: user!.fullname,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
-          });
+          };
+
+          const isSystemDup = orders.some(o => o.serial_number && o.serial_number.toLowerCase() === serial_number.toLowerCase());
+          if (isSystemDup) {
+            warnings.push({
+              rowIdx: i + 1,
+              message: `Dòng ${i + 1}: Trùng số Seri "${serial_number}" với thẻ đã có trên hệ thống. Dữ liệu mới từ Excel sẽ ghi đè dữ liệu cũ.`,
+              severity: 'warning'
+            });
+          }
+
+          const lowerSerial = serial_number.toLowerCase();
+          if (seenSerialsInExcel.has(lowerSerial)) {
+            const prevIdx = seenSerialsInExcel.get(lowerSerial)!;
+            newOrders[prevIdx] = orderObj;
+            warnings.push({
+              rowIdx: i + 1,
+              message: `Dòng ${i + 1}: Trùng số Seri "${serial_number}" trong file Excel. Hệ thống sẽ ghi đè lấy dòng mới nhất.`,
+              severity: 'warning'
+            });
+          } else {
+            seenSerialsInExcel.set(lowerSerial, newOrders.length);
+            newOrders.push(orderObj);
+          }
         }
 
         setImportPreview({ newOrders, warnings });
@@ -748,9 +786,50 @@ export default function Orders() {
     reader.readAsArrayBuffer(file);
   };
 
-  const confirmImport = (finalOrders: InsuranceOrder[]) => {
+  const confirmImport = async (finalOrders: InsuranceOrder[]) => {
+    const processedOrders = [...finalOrders];
+    let currentUsers = [...users];
+
+    for (let i = 0; i < processedOrders.length; i++) {
+      const o = processedOrders[i];
+      if (o.agency_id && typeof o.agency_id === 'string') {
+        const existingAgency = currentUsers.find(u => u.id === o.agency_id && u.role === 'AGENCY');
+        if (!existingAgency) {
+          const targetParentId = o.staff_id || user!.id;
+          const agencyByName = currentUsers.find(u => 
+            u.role === 'AGENCY' && 
+            u.fullname.toLowerCase() === (o.agency_id as string).toLowerCase() && 
+            u.parent_id === targetParentId
+          );
+          
+          if (agencyByName) {
+            o.agency_id = agencyByName.id;
+          } else {
+            const newAgencyId = `AG-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+            const newAgencyName = o.agency_id;
+            
+            const newAgency: User = {
+              id: newAgencyId,
+              username: `dl_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+              fullname: newAgencyName,
+              phone: '',
+              role: 'AGENCY',
+              parent_id: targetParentId,
+              password: `${newAgencyId}@`,
+              created_at: new Date().toISOString(),
+              edit_history: [`Tự động tạo từ import file Excel bởi ${user!.fullname}`]
+            };
+            
+            await addUser(newAgency);
+            currentUsers.push(newAgency);
+            o.agency_id = newAgencyId;
+          }
+        }
+      }
+    }
+
     // Generate change logs for import
-    const logs: ChangeLog[] = finalOrders.map(o => ({
+    const logs: ChangeLog[] = processedOrders.map(o => ({
       id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       order_id: o.id,
       serial_number: o.serial_number,
@@ -760,9 +839,9 @@ export default function Orders() {
       details: `Import thẻ bảo hiểm từ file Excel, chủ xe: ${o.vehicle_owner}`
     }));
 
-    importOrders(finalOrders, logs);
+    importOrders(processedOrders, logs);
     setImportPreview(null);
-    alert(`Đã import thành công ${finalOrders.length} đơn vào hệ thống!`);
+    alert(`Đã import thành công ${processedOrders.length} đơn vào hệ thống!`);
   };
 
   return (

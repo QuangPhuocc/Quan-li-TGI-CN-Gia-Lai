@@ -344,6 +344,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(user)
       });
+
+      if (user.role === 'AGENCY') {
+        const ordersToUpdate = orders.filter(o => 
+          o.agency_id && 
+          typeof o.agency_id === 'string' && 
+          o.agency_id.toLowerCase() === user.fullname.toLowerCase() &&
+          (!o.staff_id || o.staff_id === user.parent_id)
+        );
+        if (ordersToUpdate.length > 0) {
+          const ids = ordersToUpdate.map(o => o.id);
+          await updateOrdersBulk(ids, { agency_id: user.id }, 'Hệ thống (Tự động map Đại lý)');
+        }
+      }
     } catch (err) {
       console.error('Failed to add user to server:', err);
     }
@@ -351,12 +364,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateUser = async (id: string, updates: Partial<User>) => {
     setUsers(prev => prev.map(u => u.id === id ? { ...u, ...updates } : u));
+    const targetUser = users.find(u => u.id === id);
+    const finalName = updates.fullname || targetUser?.fullname;
+    const isAgency = (updates.role || targetUser?.role) === 'AGENCY';
+    const parentId = updates.parent_id || targetUser?.parent_id;
+
     try {
       await fetch(`/api/users/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       });
+
+      if (isAgency && finalName) {
+        const ordersToUpdate = orders.filter(o => 
+          o.agency_id && 
+          typeof o.agency_id === 'string' && 
+          o.agency_id.toLowerCase() === finalName.toLowerCase() &&
+          (!o.staff_id || o.staff_id === parentId)
+        );
+        if (ordersToUpdate.length > 0) {
+          const ids = ordersToUpdate.map(o => o.id);
+          await updateOrdersBulk(ids, { agency_id: id }, 'Hệ thống (Tự động map Đại lý)');
+        }
+      }
     } catch (err) {
       console.error('Failed to update user on server:', err);
     }

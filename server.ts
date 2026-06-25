@@ -117,6 +117,34 @@ try {
       writeJsonAtomic(USERS_FILE, updatedUsers);
       console.log('Successfully migrated Duy Thuong (thuongld) role to CTV in users.json.');
     }
+
+    // Migration 3: Add password, created_at, updated_at, edit_history to existing users
+    let needsMigration3 = false;
+    const existingUsersWithPass = readUsers(); // read fresh updated ones
+    const migratedUsers3 = existingUsersWithPass.map((u: any) => {
+      let changed = false;
+      const updated = { ...u };
+      if (!updated.password) {
+        updated.password = updated.phone ? `${updated.phone}@` : `${updated.username}@`;
+        changed = true;
+      }
+      if (!updated.created_at) {
+        updated.created_at = new Date('2026-06-25T00:00:00Z').toISOString();
+        changed = true;
+      }
+      if (!updated.edit_history) {
+        updated.edit_history = [];
+        changed = true;
+      }
+      if (changed) {
+        needsMigration3 = true;
+      }
+      return updated;
+    });
+    if (needsMigration3) {
+      writeJsonAtomic(USERS_FILE, migratedUsers3);
+      console.log('Successfully migrated users with default passwords and created_at/edit_history.');
+    }
   }
 } catch (err) {
   console.error('Failed to run database migration:', err);

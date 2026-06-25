@@ -8,7 +8,6 @@ export const ROLE_LABELS: Record<Role, string> = {
   AGENCY: 'Đại lý'
 };
 
-
 export interface User {
   id: string;
   username: string;
@@ -18,9 +17,15 @@ export interface User {
   parent_id?: string;
   address?: string;
   cccd_image?: string;
+  password?: string;
+  created_at?: string;
+  updated_at?: string;
+  edit_history?: string[];
 }
 
 export type InsuranceType = 'TNDS_OTO' | 'VCX_OTO' | 'TNDS_XEMAY' | 'Y_TE' | 'ETC' | 'KHAC';
+
+
 export type PaymentStatus = 'UNPAID' | 'PAID' | 'PARTIAL';
 export type OrderStatus = 'ACTIVE' | 'CANCELLED' | 'NEEDS_PROCESSING';
 
