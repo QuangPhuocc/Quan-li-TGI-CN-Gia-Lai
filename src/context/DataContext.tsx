@@ -1,10 +1,17 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { InsuranceOrder, User, ChangeLog } from '../types';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { InsuranceOrder, User, ChangeLog, DashboardStats, StaffReportItem, AgencyReportItem, PersonalStats } from '../types';
 
 interface DataContextType {
   orders: InsuranceOrder[];
   users: User[];
   changeLogs: ChangeLog[];
+  // Stats (server-computed)
+  dashboardStats: DashboardStats | null;
+  staffReport: StaffReportItem[];
+  agencyReport: AgencyReportItem[];
+  personalStats: PersonalStats | null;
+  reportData: { cancelled: InsuranceOrder[]; unpaid: InsuranceOrder[]; expiring: (InsuranceOrder & { daysLeft?: number })[] };
+  // Data operations
   addOrder: (order: InsuranceOrder, userFullname: string) => void;
   updateOrder: (id: string, updates: Partial<InsuranceOrder>, userFullname: string, detailMsg?: string) => void;
   importOrders: (newOrders: InsuranceOrder[], logs: ChangeLog[]) => void;
@@ -14,6 +21,8 @@ interface DataContextType {
   addUser: (user: User) => void;
   updateUser: (id: string, updates: Partial<User>) => void;
   deleteUser: (id: string) => void;
+  // Stats refresh
+  refreshStats: () => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -22,8 +31,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [orders, setOrders] = useState<InsuranceOrder[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
+  
+  // Server-computed stats
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [staffReport, setStaffReport] = useState<StaffReportItem[]>([]);
+  const [agencyReport, setAgencyReport] = useState<AgencyReportItem[]>([]);
+  const [personalStats, setPersonalStats] = useState<PersonalStats | null>(null);
+  const [reportData, setReportData] = useState<{ cancelled: InsuranceOrder[]; unpaid: InsuranceOrder[]; expiring: (InsuranceOrder & { daysLeft?: number })[] }>({ cancelled: [], unpaid: [], expiring: [] });
 
-  // Fetch all database records from backend APIs
+  // Get current authenticated user from localStorage
+  const getAuthUser = useCallback((): User | null => {
+    try {
+      const savedUser = localStorage.getItem('auth_user');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch { return null; }
+  }, []);
+
+  // Fetch core data from backend
   const fetchData = async () => {
     try {
       const [resOrders, resUsers, resLogs] = await Promise.all([
@@ -39,16 +63,60 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Fetch stats from server (server-computed)
+  const fetchStats = useCallback(async () => {
+    const authUser = getAuthUser();
+    if (!authUser) return;
+
+    try {
+      // Dashboard stats
+      const dashRes = await fetch(`/api/stats/dashboard?user_id=${authUser.id}&role=${authUser.role}`);
+      const dashData = await dashRes.json();
+      setDashboardStats(dashData);
+
+      // Role-specific stats
+      if (authUser.role === 'MASTER' || authUser.role === 'ACCOUNTANT') {
+        const staffRes = await fetch('/api/stats/staff-report');
+        setStaffReport(await staffRes.json());
+      }
+
+      if (authUser.role === 'MASTER' || authUser.role === 'ACCOUNTANT' || authUser.role === 'STAFF' || authUser.role === 'CTV') {
+        const agencyRes = await fetch(`/api/stats/agency-report?user_id=${authUser.id}&role=${authUser.role}`);
+        setAgencyReport(await agencyRes.json());
+      }
+
+      if (authUser.role === 'STAFF' || authUser.role === 'CTV') {
+        const personalRes = await fetch(`/api/stats/personal?user_id=${authUser.id}&role=${authUser.role}`);
+        setPersonalStats(await personalRes.json());
+      }
+
+      // Report list data
+      const [cancelledRes, unpaidRes, expiringRes] = await Promise.all([
+        fetch(`/api/stats/report-data?user_id=${authUser.id}&role=${authUser.role}&report_type=CANCELLED`).then(r => r.json()),
+        fetch(`/api/stats/report-data?user_id=${authUser.id}&role=${authUser.role}&report_type=UNPAID`).then(r => r.json()),
+        fetch(`/api/stats/report-data?user_id=${authUser.id}&role=${authUser.role}&report_type=EXPIRING`).then(r => r.json()),
+      ]);
+      setReportData({ cancelled: cancelledRes, unpaid: unpaidRes, expiring: expiringRes });
+
+    } catch (e) {
+      console.error('Failed to fetch stats from server:', e);
+    }
+  }, [getAuthUser]);
+
+  const refreshStats = useCallback(() => {
+    fetchStats();
+  }, [fetchStats]);
+
   // Subscribe to SSE event stream for cross-device real-time updates
   useEffect(() => {
-    fetchData();
+    fetchData().then(() => fetchStats());
 
     const eventSource = new EventSource('/api/events');
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'update') {
-          fetchData();
+          fetchData().then(() => fetchStats());
         }
       } catch (err) {
         console.error('Error parsing SSE event data:', err);
@@ -61,33 +129,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const addOrder = async (order: InsuranceOrder, userFullname: string) => {
-    const orderWithExpiry = { ...order };
-    if (!orderWithExpiry.expiration_date && orderWithExpiry.effective_date) {
-      const d = new Date(orderWithExpiry.effective_date);
-      d.setFullYear(d.getFullYear() + 1);
-      orderWithExpiry.expiration_date = d.toISOString().split('T')[0];
-    }
-
-    // Optimistic UI updates
-    setOrders(prev => [orderWithExpiry, ...prev]);
+    // Optimistic UI update
+    setOrders(prev => [order, ...prev]);
 
     const log: ChangeLog = {
       id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      order_id: orderWithExpiry.id,
-      serial_number: orderWithExpiry.serial_number || orderWithExpiry.id,
+      order_id: order.id,
+      serial_number: order.serial_number || order.id,
       action: 'CREATE',
       user_fullname: userFullname,
       timestamp: new Date().toISOString(),
-      details: `Tạo thẻ bảo hiểm mới cho chủ xe ${orderWithExpiry.vehicle_owner}`
+      details: `Tạo thẻ bảo hiểm mới cho chủ xe ${order.vehicle_owner}`
     };
     setChangeLogs(prev => [log, ...prev]);
 
     try {
-      await fetch('/api/orders', {
+      // Server computes derived fields and returns the computed record
+      const response = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(orderWithExpiry)
+        body: JSON.stringify(order)
       });
+      const computed = await response.json();
+      // Update with server-computed record
+      setOrders(prev => prev.map(o => o.id === order.id ? computed : o));
+
       await fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -99,7 +165,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateOrder = async (id: string, updates: Partial<InsuranceOrder>, userFullname: string, detailMsg?: string) => {
-    // Optimistic UI updates
+    // Optimistic UI update
     setOrders(prev => prev.map(o => {
       if (o.id === id) {
         const updated = { ...o, ...updates, updated_at: new Date().toISOString() };
@@ -181,7 +247,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const importOrders = async (newOrders: InsuranceOrder[], logs: ChangeLog[]) => {
-    // Optimistic UI updates
+    // Optimistic UI update
     setOrders(prev => {
       const updated = [...prev];
       const processedNewOrders = newOrders.map((no: InsuranceOrder) => {
@@ -213,6 +279,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setChangeLogs(prev => [...logs, ...prev]);
 
     try {
+      // Server will recompute all derived fields during bulk import
       await fetch('/api/orders/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -326,6 +393,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setChangeLogs(prev => [...logs, ...prev]);
 
     try {
+      // Server recomputes all derived fields in bulk-update
       await fetch('/api/orders/bulk-update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -406,10 +474,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <DataContext.Provider value={{ 
-      orders, users, changeLogs, 
+      orders, users, changeLogs,
+      dashboardStats, staffReport, agencyReport, personalStats, reportData,
       addOrder, updateOrder, importOrders,
       deleteOrder, deleteOrdersBulk, updateOrdersBulk,
-      addUser, updateUser, deleteUser 
+      addUser, updateUser, deleteUser,
+      refreshStats
     }}>
       {children}
     </DataContext.Provider>
@@ -423,5 +493,3 @@ export const useData = () => {
   }
   return context;
 };
-
-

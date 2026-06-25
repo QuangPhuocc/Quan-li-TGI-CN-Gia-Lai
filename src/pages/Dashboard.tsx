@@ -23,7 +23,15 @@ const getDoanhThu = (o: InsuranceOrder) => {
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const { orders, users } = useData();
+  const { 
+    orders, 
+    users, 
+    dashboardStats, 
+    staffReport, 
+    agencyReport, 
+    personalStats, 
+    reportData 
+  } = useData();
   const navigate = useNavigate();
   const [selectedStaff, setSelectedStaff] = useState<User | null>(null);
   const [selectedType, setSelectedType] = useState('TNDS_OTO');
@@ -35,73 +43,34 @@ export default function Dashboard() {
     return 'UNPAID';
   });
 
-  // Filter orders according to user roles (realtime data rules)
-  const filteredOrders = useMemo(() => {
-    if (user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') return orders;
-    if (user?.role === 'STAFF' || user?.role === 'CTV') {
-      const myAgencies = users.filter(u => u.parent_id === user.id).map(u => u.id);
-      return orders.filter(o => o.staff_id === user.id || (o.agency_id && myAgencies.includes(o.agency_id)));
-    }
-    if (user?.role === 'AGENCY') {
-      return orders.filter(o => o.agency_id === user.id);
-    }
-    return [];
-  }, [orders, user, users]);
-
   const stats = useMemo(() => {
-    const totalRev = filteredOrders.filter(o => o.status === 'ACTIVE').reduce((acc, curr) => acc + getDoanhThu(curr), 0);
-    const unpaid = filteredOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').reduce((acc, curr) => acc + curr.total_fee, 0);
-    const cancelledCount = filteredOrders.filter(o => o.status === 'CANCELLED').length;
-    
-    // Real expiring soon calculation (within 30 days)
-    const renewalCount = filteredOrders.filter(o => {
-      if (o.status !== 'ACTIVE' || !o.expiration_date) return false;
-      const diffDays = Math.ceil((new Date(o.expiration_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 0 && diffDays <= 30;
-    }).length;
-
-    return { totalRev, unpaid, cancelledCount, renewalCount };
-  }, [filteredOrders]);
+    return {
+      totalRev: dashboardStats?.totalRevenue || 0,
+      unpaid: dashboardStats?.totalDebt || 0,
+      cancelledCount: dashboardStats?.cancelledCount || 0,
+      renewalCount: dashboardStats?.renewalCount || 0
+    };
+  }, [dashboardStats]);
 
   // Chart by Provider (Hãng)
   const chartData = useMemo(() => {
-    const providerMap = new Map<string, number>();
-    filteredOrders.forEach(o => {
-      if (o.status === 'CANCELLED') return;
-      const providerName = o.provider || 'Khác';
-      const rev = getDoanhThu(o);
-      providerMap.set(providerName, (providerMap.get(providerName) || 0) + rev);
-    });
-
-    return Array.from(providerMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [filteredOrders]);
+    return dashboardStats?.providerChartData || [];
+  }, [dashboardStats]);
 
   // Master/Accountant: Staff report
   const staffReportData = useMemo(() => {
-    const staffs = users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'CTV');
-    return staffs.map(staff => {
-      const sOrders = orders.filter(o => o.staff_id === staff.id);
-      const activeOrders = sOrders.filter(o => o.status === 'ACTIVE');
-      const cancelledOrders = sOrders.filter(o => o.status === 'CANCELLED');
-      const rev = activeOrders.reduce((sum, o) => sum + o.total_fee, 0);
-      const collected = activeOrders.filter(o => o.payment_status === 'PAID').reduce((sum, o) => sum + o.total_fee, 0);
-      const unpaid = activeOrders.filter(o => o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL').reduce((sum, o) => sum + o.total_fee, 0);
-      
-      const sUnpaidList = activeOrders.filter(o => o.payment_status === 'UNPAID');
-      
-      return { 
-        staff, 
-        count: activeOrders.length, 
-        cancelledCount: cancelledOrders.length, 
-        rev, 
-        collected, 
-        unpaid,
-        cancelledList: cancelledOrders,
-        unpaidList: sUnpaidList,
-        orders: sOrders
-      };
-    });
-  }, [orders, users]);
+    return staffReport.map(s => ({
+      staff: s.staff,
+      count: s.activeCount,
+      cancelledCount: s.cancelledCount,
+      rev: s.revenue,
+      collected: s.collected,
+      unpaid: s.debt,
+      unpaidList: s.unpaidList || [],
+      cancelledList: s.cancelledList || [],
+      orders: s.allOrders || []
+    }));
+  }, [staffReport]);
 
   // Staff performance summary for the side column
   const staffStats = useMemo(() => {
@@ -111,125 +80,52 @@ export default function Dashboard() {
 
   // Agency report
   const agencyReportData = useMemo(() => {
-    const agencies = users.filter(u => u.role === 'AGENCY');
-    let filteredAgencies = agencies;
-    if (user?.role === 'STAFF' || user?.role === 'CTV') {
-      filteredAgencies = agencies.filter(a => a.parent_id === user.id);
-    }
-    return filteredAgencies.map(agency => {
-      const aOrders = orders.filter(o => o.agency_id === agency.id);
-      const activeOrders = aOrders.filter(o => o.status === 'ACTIVE');
-      const cancelledOrders = aOrders.filter(o => o.status === 'CANCELLED');
-      const rev = activeOrders.reduce((sum, o) => sum + o.total_fee, 0);
-      const collected = activeOrders.filter(o => o.payment_status === 'PAID').reduce((sum, o) => sum + o.total_fee, 0);
-      const unpaid = activeOrders.filter(o => o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL').reduce((sum, o) => sum + o.total_fee, 0);
-      const parentStaff = users.find(u => u.id === agency.parent_id)?.fullname || 'Không có';
-      return { agency, parentStaff, count: activeOrders.length, cancelledCount: cancelledOrders.length, rev, collected, unpaid };
-    });
-  }, [orders, users, user]);
+    return agencyReport.map(a => ({
+      agency: a.agency,
+      parentStaff: a.parentStaff,
+      count: a.activeCount,
+      cancelledCount: a.cancelledCount,
+      rev: a.revenue,
+      collected: a.collected,
+      unpaid: a.debt
+    }));
+  }, [agencyReport]);
 
   // Cancelled cards list
   const cancelledReportData = useMemo(() => {
-    return filteredOrders.filter(o => o.status === 'CANCELLED');
-  }, [filteredOrders]);
+    return reportData.cancelled;
+  }, [reportData]);
 
   // Unpaid cards list
   const unpaidReportData = useMemo(() => {
-    return filteredOrders.filter(o => o.status === 'ACTIVE' && (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL'));
-  }, [filteredOrders]);
+    return reportData.unpaid;
+  }, [reportData]);
 
   // Expiring soon cards (within 30 days)
   const expiringReportData = useMemo(() => {
-    return filteredOrders.filter(o => {
-      if (o.status !== 'ACTIVE' || !o.expiration_date) return false;
-      const diffDays = Math.ceil((new Date(o.expiration_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 0 && diffDays <= 30;
-    }).map(o => {
-      const diffDays = Math.ceil((new Date(o.expiration_date!).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-      return { ...o, daysLeft: diffDays };
-    }).sort((a, b) => a.daysLeft - b.daysLeft);
-  }, [filteredOrders]);
+    return reportData.expiring;
+  }, [reportData]);
 
   const staffDashboardData = useMemo(() => {
     if (user?.role !== 'STAFF' && user?.role !== 'CTV') return null;
-    const selfOrders = orders.filter(o => o.staff_id === user.id);
+    return personalStats;
+  }, [personalStats, user]);
 
-    const statsByType = INSURANCE_TYPES.map(type => {
-      const typeOrders = selfOrders.filter(o => o.insurance_type === type.id);
-      
-      const revenue = typeOrders.filter(o => o.status === 'ACTIVE').reduce((acc, curr) => acc + getDoanhThu(curr), 0);
-      const unpaid = typeOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').reduce((acc, curr) => acc + curr.total_fee, 0);
-      const cancelledCount = typeOrders.filter(o => o.status === 'CANCELLED').length;
-      const successCount = typeOrders.filter(o => o.status === 'ACTIVE' && o.payment_status === 'PAID').length;
-      const expiringCount = typeOrders.filter(o => {
-        if (o.status !== 'ACTIVE' || !o.expiration_date) return false;
-        const diffDays = Math.ceil((new Date(o.expiration_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-        return diffDays >= 0 && diffDays <= 30;
-      }).length;
+  if (!dashboardStats) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
-      // Provider Chart
-      const providerMap = new Map<string, number>();
-      typeOrders.forEach(o => {
-        if (o.status === 'CANCELLED') return;
-        const providerName = o.provider || 'Khác';
-        const rev = getDoanhThu(o);
-        providerMap.set(providerName, (providerMap.get(providerName) || 0) + rev);
-      });
-      const providerChartData = Array.from(providerMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-
-      // Ratio Chart
-      const unpaidCount = typeOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').length;
-      const ratioChartData = [
-        { name: 'Công nợ chưa thu', value: unpaidCount },
-        { name: 'Số đơn hủy', value: cancelledCount },
-        { name: 'Số đơn thành công', value: successCount }
-      ].filter(item => item.value > 0);
-
-      return {
-        id: type.id,
-        label: type.label,
-        revenue,
-        unpaid,
-        successCount,
-        cancelledCount,
-        expiringCount,
-        providerChartData,
-        ratioChartData
-      };
-    });
-
-    // Total stats for quick overview cards
-    const totalRevenue = selfOrders.filter(o => o.status === 'ACTIVE').reduce((acc, curr) => acc + getDoanhThu(curr), 0);
-    const totalUnpaid = selfOrders.filter(o => (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL') && o.status === 'ACTIVE').reduce((acc, curr) => acc + curr.total_fee, 0);
-    const totalSuccess = selfOrders.filter(o => o.status === 'ACTIVE' && o.payment_status === 'PAID').length;
-    const totalCancelled = selfOrders.filter(o => o.status === 'CANCELLED').length;
-    const totalExpiring = selfOrders.filter(o => {
-      if (o.status !== 'ACTIVE' || !o.expiration_date) return false;
-      const diffDays = Math.ceil((new Date(o.expiration_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 0 && diffDays <= 30;
-    }).length;
-
-    const totalUnpaidOrdersCount = selfOrders.filter(o => o.status === 'ACTIVE' && (o.payment_status === 'UNPAID' || o.payment_status === 'PARTIAL')).length;
-    const totalNeedsProcessing = selfOrders.filter(o => {
-      if (o.status === 'CANCELLED') return false;
-      const isCTV = user?.role === 'CTV';
-      const hasMissingStaff = !o.staff_id;
-      const hasMissingPhoneOrAgency = !isCTV && !o.customer_phone && !o.agency_id;
-      const hasMissingFee = o.tnds_fee === 0 || o.total_fee === 0;
-      return hasMissingStaff || hasMissingPhoneOrAgency || hasMissingFee;
-    }).length;
-
-    return {
-      statsByType,
-      totalRevenue,
-      totalUnpaid,
-      totalSuccess,
-      totalCancelled,
-      totalExpiring,
-      totalUnpaidOrdersCount,
-      totalNeedsProcessing
-    };
-  }, [orders, user]);
+  if ((user?.role === 'STAFF' || user?.role === 'CTV') && !personalStats) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   // Excel Export helper for Reports
   const exportReportToExcel = (tab: string) => {

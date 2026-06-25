@@ -507,19 +507,14 @@ export default function Orders() {
       const foundAgency = users.find(u => u.id === o.agency_id);
       const agencyName = foundAgency ? foundAgency.fullname : (o.agency_id || '');
       
-      const baseFee = o.status === 'CANCELLED' ? 0 : ((o.tnds_fee / 1.1) + o.nn_fee);
       const commRate = o.commission_rate || 0;
-      const commAmount = baseFee * (commRate / 100);
-      const totalFeeVal = o.status === 'CANCELLED' ? 0 : o.total_fee;
-      const shippingVal = o.status === 'CANCELLED' ? 0 : o.shipping_fee;
-      const codVal = o.status === 'CANCELLED' ? 0 : o.cod_amount;
-      const nopVe = Math.round(totalFeeVal - commAmount + shippingVal - codVal);
+      const nopVe = o.status === 'CANCELLED' ? 0 : (o.nop_ve || 0);
 
       if (filterInsurance === 'VCX_OTO') {
         const fee = o.status === 'CANCELLED' ? 0 : o.total_fee;
-        const nopve = o.status === 'CANCELLED' ? 0 : (o.vcx_nop_ve || 0);
+        const nopve = o.status === 'CANCELLED' ? 0 : (o.nop_ve || 0);
         const payment = o.status === 'CANCELLED' ? 0 : (o.vcx_payment || 0);
-        const du = payment - nopve;
+        const du = o.status === 'CANCELLED' ? 0 : (o.du || 0);
 
         return {
           'STT': index + 1,
@@ -1638,9 +1633,9 @@ export default function Orders() {
 
                 if (filterInsurance === 'VCX_OTO') {
                   const fee = isCancelled ? 0 : order.total_fee;
-                  const nopve = isCancelled ? 0 : (order.vcx_nop_ve || 0);
+                  const nopve = isCancelled ? 0 : (order.nop_ve || 0);
                   const payment = isCancelled ? 0 : (order.vcx_payment || 0);
-                  const du = payment - nopve;
+                  const du = isCancelled ? 0 : (order.du || 0);
                   const hasPayment = (order.vcx_payment !== undefined && order.vcx_payment !== null && order.vcx_payment > 0);
 
                   return (
@@ -1802,17 +1797,7 @@ export default function Orders() {
                       {order.commission_rate !== undefined ? `${order.commission_rate}%` : '0%'}
                     </td>
                     <td className="px-1 py-1 border-r border-slate-200 text-right whitespace-nowrap font-medium text-emerald-700">
-                      {new Intl.NumberFormat('vi-VN').format(
-                        (() => {
-                          const baseFee = order.status === 'CANCELLED' ? 0 : ((order.tnds_fee / 1.1) + order.nn_fee);
-                          const commRate = order.commission_rate || 0;
-                          const commAmount = baseFee * (commRate / 100);
-                          const totalFeeVal = order.status === 'CANCELLED' ? 0 : order.total_fee;
-                          const shippingVal = order.status === 'CANCELLED' ? 0 : order.shipping_fee;
-                          const codVal = order.status === 'CANCELLED' ? 0 : order.cod_amount;
-                          return Math.round(totalFeeVal - commAmount + shippingVal - codVal);
-                        })()
-                      )} ₫
+                      {new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : (order.nop_ve || 0))} ₫
                     </td>
                     <td className="px-1 py-1 border-r border-slate-200 max-w-[120px] truncate" title={order.notes}>{order.notes || <span className="text-slate-400">-</span>}</td>
                     <td className="px-1 py-1 border-r border-slate-200 whitespace-nowrap text-center">{order.provider || <span className="text-slate-400">-</span>}</td>

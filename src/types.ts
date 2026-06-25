@@ -21,6 +21,7 @@ export interface User {
   created_at?: string;
   updated_at?: string;
   edit_history?: string[];
+  default_commission_rate?: number; // Tỷ lệ hoa hồng mặc định cho CTV
 }
 
 export type InsuranceType = 'TNDS_OTO' | 'VCX_OTO' | 'TNDS_XEMAY' | 'Y_TE' | 'ETC' | 'KHAC';
@@ -59,6 +60,18 @@ export interface InsuranceOrder {
   updated_by?: string; // Người cập nhật cuối (ID hoặc tên)
   created_at: string;
   updated_at: string;
+
+  // --- Server-computed derived fields (readonly on client) ---
+  base_fee?: number;           // = (tnds_fee / 1.1) + nn_fee  (Doanh thu hãng)
+  nop_ve?: number;             // Server tính tự động
+  commission_amount?: number;  // = base_fee * commission_rate / 100
+  du?: number;                 // VCX only: vcx_payment - vcx_nop_ve
+  debt_amount?: number;        // Công nợ = total_fee khi chưa TT
+
+  // --- Traceability ---
+  import_batch_id?: string;    // Nhóm import
+  source?: 'EXCEL_IMPORT' | 'MANUAL_INPUT';
+
   // VCX specific fields
   gtx_dkbs?: string;
   hieu_xe_nam_sx?: string;
@@ -78,4 +91,65 @@ export interface ChangeLog {
   user_fullname: string;
   timestamp: string;
   details: string;
+}
+
+// --- System Configuration ---
+export interface SystemConfig {
+  providers: string[];              // Danh sách Hãng BH
+  default_commission_rate: number;  // % hoa hồng mặc định
+  insurance_types: InsuranceType[];
+}
+
+// --- API Response Types for Dashboard Stats ---
+export interface DashboardStats {
+  totalRevenue: number;
+  totalDebt: number;
+  cancelledCount: number;
+  renewalCount: number;
+  unpaidOrdersCount: number;
+  needsProcessingCount: number;
+  providerChartData: { name: string; value: number }[];
+}
+
+export interface StaffReportItem {
+  staff: User;
+  activeCount: number;
+  cancelledCount: number;
+  revenue: number;
+  collected: number;
+  debt: number;
+  unpaidList: InsuranceOrder[];
+  cancelledList: InsuranceOrder[];
+  allOrders: InsuranceOrder[];
+}
+
+export interface AgencyReportItem {
+  agency: User;
+  parentStaff: string;
+  activeCount: number;
+  cancelledCount: number;
+  revenue: number;
+  collected: number;
+  debt: number;
+}
+
+export interface PersonalStats {
+  statsByType: {
+    id: string;
+    label: string;
+    revenue: number;
+    unpaid: number;
+    successCount: number;
+    cancelledCount: number;
+    expiringCount: number;
+    providerChartData: { name: string; value: number }[];
+    ratioChartData: { name: string; value: number }[];
+  }[];
+  totalRevenue: number;
+  totalUnpaid: number;
+  totalSuccess: number;
+  totalCancelled: number;
+  totalExpiring: number;
+  totalUnpaidOrdersCount: number;
+  totalNeedsProcessing: number;
 }
