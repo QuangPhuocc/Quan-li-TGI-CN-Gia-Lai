@@ -65,16 +65,16 @@ if (!fs.existsSync(LOGS_FILE)) {
 try {
   if (fs.existsSync(USERS_FILE)) {
     const existingUsers = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
-    const needsUserMigration = existingUsers.some((u: any) => ['diem', 'duythuong', 'linh', 'nhi', 'yen'].includes(u.username));
+    const needsUserMigration = existingUsers.some((u: any) => ['diem', 'duythuong', 'linh', 'nhi', 'yen', 'diemak', 'nhivty', 'thuongld', 'yenlt', 'linhltt', 'phuoclq'].includes(u.username) && u.role !== 'MASTER');
     if (needsUserMigration) {
       const migratedUsers = [
         { id: '1', username: 'master', fullname: 'MASTER', phone: '', role: 'MASTER' },
-        { id: '2', username: 'diemak', fullname: 'Kiều Diễm', phone: '0981740680', role: 'ACCOUNTANT', parent_id: '1' },
-        { id: '3', username: 'nhivty', fullname: 'Yến Nhi', phone: '0931183389', role: 'STAFF', parent_id: '1' },
-        { id: '4', username: 'thuongld', fullname: 'Duy Thương', phone: '0912349681', role: 'CTV', parent_id: '1' },
-        { id: '5', username: 'yenlt', fullname: 'Thị Yên', phone: '0942542249', role: 'STAFF', parent_id: '1' },
-        { id: '6', username: 'linhltt', fullname: 'Thuỳ Linh', phone: '0962731468', role: 'STAFF', parent_id: '1' },
-        { id: '7', username: 'phuoclq', fullname: 'Quang Phước', phone: '0906643381', role: 'STAFF', parent_id: '1' },
+        { id: '2', username: '0981740680', fullname: 'Kiều Diễm', phone: '0981740680', role: 'ACCOUNTANT', parent_id: '1' },
+        { id: '3', username: '0931183389', fullname: 'Yến Nhi', phone: '0931183389', role: 'STAFF', parent_id: '1' },
+        { id: '4', username: '0912349681', fullname: 'Duy Thương', phone: '0912349681', role: 'CTV', parent_id: '1' },
+        { id: '5', username: '0942542249', fullname: 'Thị Yên', phone: '0942542249', role: 'STAFF', parent_id: '1' },
+        { id: '6', username: '0962731468', fullname: 'Thuỳ Linh', phone: '0962731468', role: 'STAFF', parent_id: '1' },
+        { id: '7', username: '0906643381', fullname: 'Quang Phước', phone: '0906643381', role: 'STAFF', parent_id: '1' },
         // Keep existing agency users and update their parent_ids
         ...existingUsers.filter((u: any) => u.role === 'AGENCY').map((u: any) => {
           let parent_id = u.parent_id;
@@ -106,16 +106,16 @@ try {
     }
 
     // Migration 2: Update Duy Thuong (thuongld) role to CTV if it is currently STAFF
-    const hasThuongAsStaff = existingUsers.some((u: any) => u.username === 'thuongld' && u.role === 'STAFF');
+    const hasThuongAsStaff = existingUsers.some((u: any) => (u.username === 'thuongld' || u.username === '0912349681') && u.role === 'STAFF');
     if (hasThuongAsStaff) {
       const updatedUsers = existingUsers.map((u: any) => {
-        if (u.username === 'thuongld') {
+        if (u.username === 'thuongld' || u.username === '0912349681') {
           return { ...u, role: 'CTV' };
         }
         return u;
       });
       writeJsonAtomic(USERS_FILE, updatedUsers);
-      console.log('Successfully migrated Duy Thuong (thuongld) role to CTV in users.json.');
+      console.log('Successfully migrated Duy Thương role to CTV in users.json.');
     }
 
     // Migration 3: Add password, created_at, updated_at, edit_history to existing users
@@ -144,6 +144,36 @@ try {
     if (needsMigration3) {
       writeJsonAtomic(USERS_FILE, migratedUsers3);
       console.log('Successfully migrated users with default passwords and created_at/edit_history.');
+    }
+
+    // Migration 4: Force all usernames and passwords to match phone number rules
+    let needsMigration4 = false;
+    const existingUsersWithUsernameAsPhone = readUsers();
+    const migratedUsers4 = existingUsersWithUsernameAsPhone.map((u: any) => {
+      let changed = false;
+      const updated = { ...u };
+      if (updated.role !== 'MASTER' && updated.phone && updated.phone.trim() !== '') {
+        const cleanPhone = updated.phone.trim();
+        if (updated.username !== cleanPhone) {
+          console.log(`Migrating username for ${updated.fullname}: ${updated.username} -> ${cleanPhone}`);
+          updated.username = cleanPhone;
+          changed = true;
+        }
+        const defaultOldPass = `${u.username}@`;
+        const defaultNewPass = `${cleanPhone}@`;
+        if (!updated.password || updated.password === defaultOldPass) {
+          updated.password = defaultNewPass;
+          changed = true;
+        }
+      }
+      if (changed) {
+        needsMigration4 = true;
+      }
+      return updated;
+    });
+    if (needsMigration4) {
+      writeJsonAtomic(USERS_FILE, migratedUsers4);
+      console.log('Successfully completed Migration 4 (username = phone).');
     }
   }
 } catch (err) {

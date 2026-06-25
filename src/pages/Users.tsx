@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { User, Role } from '../types';
-import { Edit, Trash, Plus, X, History } from 'lucide-react';
+import { Edit, Trash, Plus, X, History, ChevronDown, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function Users() {
@@ -15,6 +15,13 @@ export default function Users() {
   const [sortField, setSortField] = useState<'created_at' | 'fullname' | 'role'>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedUserForHistory, setSelectedUserForHistory] = useState<User | null>(null);
+  const [expandedUserIds, setExpandedUserIds] = useState<string[]>([]);
+
+  const toggleExpandUser = (id: string) => {
+    setExpandedUserIds(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
 
   if (user?.role !== 'MASTER') {
     return (
@@ -36,21 +43,24 @@ export default function Users() {
   };
 
   const handleSave = (userData: Partial<User>) => {
+    const cleanUsername = userData.role === 'MASTER' ? (userData.username || 'master') : userData.phone;
+    const finalUserData = { ...userData, username: cleanUsername };
+
     if (editingUser) {
       const changes: string[] = [];
       const timestamp = new Date().toISOString();
       const formattedTime = format(new Date(timestamp), 'dd/MM/yyyy HH:mm:ss');
       
-      if (userData.username !== editingUser.username) changes.push(`Tên đăng nhập: ${editingUser.username} -> ${userData.username}`);
-      if (userData.fullname !== editingUser.fullname) changes.push(`Họ tên: ${editingUser.fullname} -> ${userData.fullname}`);
-      if (userData.phone !== editingUser.phone) changes.push(`SĐT: ${editingUser.phone || 'Không có'} -> ${userData.phone || 'Không có'}`);
-      if (userData.role !== editingUser.role) changes.push(`Quyền: ${editingUser.role} -> ${userData.role}`);
-      if (userData.parent_id !== editingUser.parent_id) {
+      if (finalUserData.username !== editingUser.username) changes.push(`Tên đăng nhập: ${editingUser.username} -> ${finalUserData.username}`);
+      if (finalUserData.fullname !== editingUser.fullname) changes.push(`Họ tên: ${editingUser.fullname} -> ${finalUserData.fullname}`);
+      if (finalUserData.phone !== editingUser.phone) changes.push(`SĐT: ${editingUser.phone || 'Không có'} -> ${finalUserData.phone || 'Không có'}`);
+      if (finalUserData.role !== editingUser.role) changes.push(`Quyền: ${editingUser.role} -> ${finalUserData.role}`);
+      if (finalUserData.parent_id !== editingUser.parent_id) {
         const oldParent = users.find(u => u.id === editingUser.parent_id)?.fullname || 'Không có';
-        const newParent = users.find(u => u.id === userData.parent_id)?.fullname || 'Không có';
+        const newParent = users.find(u => u.id === finalUserData.parent_id)?.fullname || 'Không có';
         changes.push(`Người quản lý: ${oldParent} -> ${newParent}`);
       }
-      if (userData.password && userData.password !== editingUser.password) {
+      if (finalUserData.password && finalUserData.password !== editingUser.password) {
         changes.push(`Cập nhật mật khẩu mới`);
       }
 
@@ -60,17 +70,17 @@ export default function Users() {
       ];
 
       updateUser(editingUser.id, {
-        ...userData,
+        ...finalUserData,
         updated_at: timestamp,
         edit_history: newHistory
       });
     } else {
       const timestamp = new Date().toISOString();
-      const defaultPassword = userData.phone ? `${userData.phone}@` : `${userData.username}@`;
+      const defaultPassword = finalUserData.phone ? `${finalUserData.phone}@` : `${finalUserData.username}@`;
       const newUser: User = {
-        ...userData,
+        ...finalUserData,
         id: `U-${Date.now()}`,
-        password: userData.password || defaultPassword,
+        password: finalUserData.password || defaultPassword,
         created_at: timestamp,
         updated_at: timestamp,
         edit_history: [`${format(new Date(timestamp), 'dd/MM/yyyy HH:mm:ss')} - Tạo tài khoản bởi MASTER`]
@@ -91,7 +101,8 @@ export default function Users() {
   };
 
   const sortedUsers = useMemo(() => {
-    return [...users].sort((a, b) => {
+    const nonAgencyUsers = users.filter(u => u.role !== 'AGENCY');
+    return [...nonAgencyUsers].sort((a, b) => {
       let valA = '';
       let valB = '';
 
@@ -149,56 +160,113 @@ export default function Users() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {sortedUsers.map(u => (
-                <tr key={u.id} className="hover:bg-slate-50 transition-colors text-sm">
-                  <td className="px-6 py-4 font-semibold text-slate-900">{u.fullname}</td>
-                  <td className="px-6 py-4 text-slate-600">{u.username}</td>
-                  <td className="px-6 py-4">
-                    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                      u.role === 'MASTER' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
-                      u.role === 'ACCOUNTANT' ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' :
-                      u.role === 'STAFF' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
-                      u.role === 'CTV' ? 'bg-teal-100 text-teal-700 border border-teal-200' :
-                      'bg-slate-100 text-slate-700 border border-slate-200'
-                    }`}>
-                      {u.role === 'MASTER' ? 'Master' :
-                       u.role === 'ACCOUNTANT' ? 'Quản lý' :
-                       u.role === 'STAFF' ? 'Nhân viên' :
-                       u.role === 'CTV' ? 'CTV' :
-                       u.role === 'AGENCY' ? 'Đại lý' : u.role}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-slate-600">{u.phone || '-'}</td>
-                  <td className="px-6 py-4 text-slate-500 font-medium">
-                    {u.parent_id ? users.find(x => x.id === u.parent_id)?.fullname : '-'}
-                  </td>
-                  <td className="px-6 py-4 text-slate-600">
-                    {u.created_at ? format(new Date(u.created_at), 'dd/MM/yyyy') : '-'}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <button 
-                      onClick={() => setSelectedUserForHistory(u)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
-                      title="Xem lịch sử chỉnh sửa tài khoản"
-                    >
-                      <History className="w-3.5 h-3.5 text-slate-500" />
-                      Xem lịch sử
-                    </button>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center justify-center gap-2">
-                      <button onClick={() => handleEdit(u)} className="p-1.5 text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 rounded-lg transition-colors cursor-pointer" title="Sửa">
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      {u.role !== 'MASTER' && (
-                        <button onClick={() => handleDelete(u.id)} className="p-1.5 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-lg transition-colors cursor-pointer" title="Xóa">
-                          <Trash className="w-4 h-4" />
+              {sortedUsers.map(u => {
+                const userAgencies = users.filter(x => x.role === 'AGENCY' && x.parent_id === u.id);
+                const isExpanded = expandedUserIds.includes(u.id);
+
+                return (
+                  <React.Fragment key={u.id}>
+                    <tr className="hover:bg-slate-50 transition-colors text-sm">
+                      <td className="px-6 py-4 font-semibold text-slate-900">
+                        <div className="flex items-center gap-2">
+                          {userAgencies.length > 0 && (
+                            <button 
+                              onClick={() => toggleExpandUser(u.id)}
+                              className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer transition-colors"
+                              title={isExpanded ? "Thu gọn danh sách đại lý" : "Xem danh sách đại lý"}
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="w-4 h-4" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
+                          <span className={userAgencies.length > 0 ? "pl-0" : "pl-6"}>{u.fullname}</span>
+                          {userAgencies.length > 0 && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-100">
+                              {userAgencies.length} đại lý
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-slate-600">{u.username}</td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                          u.role === 'MASTER' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
+                          u.role === 'ACCOUNTANT' ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' :
+                          u.role === 'STAFF' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
+                          u.role === 'CTV' ? 'bg-teal-100 text-teal-700 border border-teal-200' :
+                          'bg-slate-100 text-slate-700 border border-slate-200'
+                        }`}>
+                          {u.role === 'MASTER' ? 'Master' :
+                           u.role === 'ACCOUNTANT' ? 'Quản lý' :
+                           u.role === 'STAFF' ? 'Nhân viên' :
+                           u.role === 'CTV' ? 'CTV' :
+                           u.role === 'AGENCY' ? 'Đại lý' : u.role}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-slate-600">{u.phone || '-'}</td>
+                      <td className="px-6 py-4 text-slate-500 font-medium">
+                        {u.parent_id ? users.find(x => x.id === u.parent_id)?.fullname : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-slate-600">
+                        {u.created_at ? format(new Date(u.created_at), 'dd/MM/yyyy') : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <button 
+                          onClick={() => setSelectedUserForHistory(u)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                          title="Xem lịch sử chỉnh sửa tài khoản"
+                        >
+                          <History className="w-3.5 h-3.5 text-slate-500" />
+                          Xem lịch sử
                         </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center justify-center gap-2">
+                          <button onClick={() => handleEdit(u)} className="p-1.5 text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-100 rounded-lg transition-colors cursor-pointer" title="Sửa">
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          {u.role !== 'MASTER' && (
+                            <button onClick={() => handleDelete(u.id)} className="p-1.5 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-lg transition-colors cursor-pointer" title="Xóa">
+                              <Trash className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && userAgencies.length > 0 && (
+                      <tr className="bg-slate-50/50">
+                        <td colSpan={8} className="px-12 py-3 border-t border-b border-slate-100">
+                          <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden max-w-4xl">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 border-b border-slate-200 text-slate-600 font-semibold text-[10px] uppercase">
+                                  <th className="px-4 py-2">Tên đại lý</th>
+                                  <th className="px-4 py-2">Số điện thoại</th>
+                                  <th className="px-4 py-2">Mã Đại lý (Username)</th>
+                                  <th className="px-4 py-2">Ngày tạo</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 text-slate-600">
+                                {userAgencies.map(agency => (
+                                  <tr key={agency.id} className="hover:bg-slate-50">
+                                    <td className="px-4 py-2 font-medium text-slate-900">{agency.fullname}</td>
+                                    <td className="px-4 py-2">{agency.phone || '-'}</td>
+                                    <td className="px-4 py-2">{agency.username}</td>
+                                    <td className="px-4 py-2">{agency.created_at ? format(new Date(agency.created_at), 'dd/MM/yyyy') : '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -235,12 +303,26 @@ function UserModal({ user, users, onClose, onSave }: any) {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    setFormData(prev => {
+      const updated = { ...prev, [name]: value };
+      if (name === 'phone' && prev.role !== 'MASTER') {
+        updated.username = value;
+      }
+      if (name === 'role') {
+        if (value === 'MASTER') {
+          updated.username = user?.username || 'master';
+        } else {
+          updated.username = prev.phone || '';
+        }
+      }
+      return updated;
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData);
+    const cleanUsername = formData.role === 'MASTER' ? formData.username : formData.phone;
+    onSave({ ...formData, username: cleanUsername });
   };
 
   return (
@@ -257,15 +339,26 @@ function UserModal({ user, users, onClose, onSave }: any) {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Tên đăng nhập <span className="text-red-500">*</span></label>
-              <input required type="text" name="username" value={formData.username} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700" />
+              <input 
+                required 
+                type="text" 
+                name="username" 
+                value={formData.role === 'MASTER' ? (formData.username || '') : (formData.phone || '')} 
+                onChange={handleChange} 
+                disabled={formData.role !== 'MASTER'}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700 disabled:bg-slate-100 disabled:text-slate-500" 
+              />
+              {formData.role !== 'MASTER' && (
+                <span className="text-[10px] text-slate-500 mt-1 block">Tên đăng nhập tự động sử dụng Số điện thoại.</span>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Họ và tên <span className="text-red-500">*</span></label>
-              <input required type="text" name="fullname" value={formData.fullname} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700" />
+              <input required type="text" name="fullname" value={formData.fullname} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700 text-slate-800" />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Số điện thoại</label>
-              <input type="text" name="phone" value={formData.phone} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700" />
+              <input type="text" name="phone" value={formData.phone} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700 text-slate-800" />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
@@ -275,7 +368,7 @@ function UserModal({ user, users, onClose, onSave }: any) {
                 value={formData.password} 
                 onChange={handleChange} 
                 placeholder={user ? "Nhập mật khẩu mới hoặc để trống" : "Mặc định: [SĐT]@ hoặc [Tên đăng nhập]@"} 
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700" 
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700 text-slate-800" 
               />
             </div>
             <div>

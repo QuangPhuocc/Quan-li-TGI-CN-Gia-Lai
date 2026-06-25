@@ -5,31 +5,9 @@ import { Shield } from 'lucide-react';
 import { User } from '../types';
 
 export default function Login() {
-  const [users, setUsers] = useState<User[]>([]);
-  const [username, setUsername] = useState('master');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(true);
   const { user, login } = useAuth();
-
-  useEffect(() => {
-    fetch('/api/users')
-      .then(res => res.json())
-      .then((data: User[]) => {
-        const filtered = data.filter(u => u.role !== 'AGENCY');
-        setUsers(filtered);
-        const hasMaster = filtered.some(u => u.username === 'master');
-        if (hasMaster) {
-          setUsername('master');
-        } else if (filtered.length > 0) {
-          setUsername(filtered[0].username);
-        }
-        setLoading(false);
-      })
-      .catch(e => {
-        console.error('Failed to load users:', e);
-        setLoading(false);
-      });
-  }, []);
 
   if (user) {
     return <Navigate to="/" replace />;
@@ -53,21 +31,14 @@ export default function Login() {
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Tài khoản</label>
-              {loading ? (
-                <div className="text-sm text-slate-500 animate-pulse">Đang tải danh sách tài khoản...</div>
-              ) : (
-                <select 
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                >
-                  {users.map(u => (
-                    <option key={u.id} value={u.username}>
-                      {u.role === 'MASTER' ? 'Master' : u.role === 'ACCOUNTANT' ? 'Quản lý' : u.role === 'CTV' ? 'CTV' : 'Nhân viên'} - {u.fullname}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <input 
+                type="text" 
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Nhập tên đăng nhập hoặc số điện thoại"
+                required
+                className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-slate-800"
+              />
             </div>
 
             <div>
@@ -78,17 +49,13 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Nhập mật khẩu"
                 required
-                className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-slate-800"
               />
-              <p className="text-xs text-slate-500 mt-2">
-                * Mật khẩu mặc định là [Số điện thoại]@ hoặc [Tên đăng nhập]@ nếu không có số điện thoại.
-              </p>
             </div>
             
             <button 
               type="submit"
-              disabled={loading}
-              className="w-full bg-blue-600 text-white font-medium py-2.5 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-slate-400"
+              className="w-full bg-blue-600 text-white font-medium py-2.5 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
             >
               Đăng nhập hệ thống
             </button>
