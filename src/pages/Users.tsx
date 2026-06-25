@@ -46,6 +46,25 @@ export default function Users() {
     const cleanUsername = userData.role === 'MASTER' ? (userData.username || 'master') : userData.phone;
     const finalUserData = { ...userData, username: cleanUsername };
 
+    if (finalUserData.role === 'AGENCY') {
+      const targetName = finalUserData.fullname?.trim() || "";
+      if (!targetName) {
+        alert("Tên đại lý không được để trống!");
+        return;
+      }
+      const parentId = finalUserData.parent_id || "";
+      const isDup = users.some(u => 
+        u.role === 'AGENCY' && 
+        u.fullname.trim().toLowerCase() === targetName.toLowerCase() &&
+        u.parent_id === parentId &&
+        (!editingUser || u.id !== editingUser.id)
+      );
+      if (isDup) {
+        alert(`Đại lý với tên "${targetName}" đã tồn tại dưới quyền quản lý của nhân viên được chọn. Vui lòng chọn một tên khác!`);
+        return;
+      }
+    }
+
     if (editingUser) {
       const changes: string[] = [];
       const timestamp = new Date().toISOString();

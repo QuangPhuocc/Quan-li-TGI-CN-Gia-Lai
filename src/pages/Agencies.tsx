@@ -58,6 +58,23 @@ export default function Agencies() {
   const [selectedAgencyForStatement, setSelectedAgencyForStatement] = useState<User | null>(null);
 
   const handleSave = (agencyData: Partial<User>) => {
+    const targetName = agencyData.fullname?.trim() || "";
+    if (!targetName) {
+      alert("Tên đại lý không được để trống!");
+      return;
+    }
+
+    const isDup = users.some(u => 
+      u.role === 'AGENCY' && 
+      u.fullname.trim().toLowerCase() === targetName.toLowerCase() &&
+      u.parent_id === user.id &&
+      (!editingAgency || u.id !== editingAgency.id)
+    );
+    if (isDup) {
+      alert(`Đại lý với tên "${targetName}" đã tồn tại dưới quyền quản lý của bạn. Vui lòng chọn một tên khác!`);
+      return;
+    }
+
     if (editingAgency) {
       updateUser(editingAgency.id, agencyData);
     } else {

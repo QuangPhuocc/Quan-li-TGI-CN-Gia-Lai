@@ -25,7 +25,13 @@ export default function Header({ toggleSidebar }: { toggleSidebar?: () => void }
         <div className="flex items-center gap-3">
           <div className="text-right hidden md:block">
             <p className="text-sm font-medium text-slate-700">{user?.fullname}</p>
-            <p className="text-xs text-slate-500">{user?.role}</p>
+            <p className="text-xs text-slate-500">
+              {user?.role === 'MASTER' ? 'Master' :
+               user?.role === 'ACCOUNTANT' ? 'Quản lý' :
+               user?.role === 'STAFF' ? 'Nhân viên' :
+               user?.role === 'CTV' ? 'CTV' :
+               user?.role === 'AGENCY' ? 'Đại lý' : (user?.role || '')}
+            </p>
           </div>
           <button 
             onClick={logout}
