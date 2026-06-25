@@ -466,22 +466,39 @@ function AgencyStatementModal({ agency, onClose, users, orders }: { agency: User
     let totalShip = 0;
     let totalComm = 0;
     let totalNop = 0;
+    let totalPayment = 0;
+    let totalDu = 0;
 
     filteredOrders.forEach(o => {
       if (o.status === 'CANCELLED') return;
-      totalFee += o.total_fee;
-      totalCod += o.cod_amount;
-      totalShip += o.shipping_fee;
+      if (filterInsurance === 'VCX_OTO') {
+        totalFee += o.total_fee;
+        totalNop += (o.vcx_nop_ve || 0);
+        totalPayment += (o.vcx_payment || 0);
+        totalDu += ((o.vcx_payment || 0) - (o.vcx_nop_ve || 0));
+      } else {
+        totalFee += o.total_fee;
+        totalCod += o.cod_amount;
+        totalShip += o.shipping_fee;
 
-      const baseFee = (o.tnds_fee / 1.1) + o.nn_fee;
-      const commRate = o.commission_rate || 0;
-      const commAmount = baseFee * (commRate / 100);
-      totalComm += commAmount;
-      totalNop += (o.total_fee - commAmount + o.shipping_fee - o.cod_amount);
+        const baseFee = (o.tnds_fee / 1.1) + o.nn_fee;
+        const commRate = o.commission_rate || 0;
+        const commAmount = baseFee * (commRate / 100);
+        totalComm += commAmount;
+        totalNop += (o.total_fee - commAmount + o.shipping_fee - o.cod_amount);
+      }
     });
 
-    return { totalFee, totalCod, totalShip, totalComm, totalNop: Math.round(totalNop) };
-  }, [filteredOrders]);
+    return { 
+      totalFee, 
+      totalCod, 
+      totalShip, 
+      totalComm, 
+      totalNop: Math.round(totalNop), 
+      totalPayment, 
+      totalDu 
+    };
+  }, [filteredOrders, filterInsurance]);
 
   // Reset checked rows on filters change
   React.useEffect(() => {
@@ -499,6 +516,32 @@ function AgencyStatementModal({ agency, onClose, users, orders }: { agency: User
     }
 
     const dataToExport = ordersToExport.map((o, index) => {
+      if (filterInsurance === 'VCX_OTO') {
+        const fee = o.status === 'CANCELLED' ? 0 : o.total_fee;
+        const nopve = o.status === 'CANCELLED' ? 0 : (o.vcx_nop_ve || 0);
+        const payment = o.status === 'CANCELLED' ? 0 : (o.vcx_payment || 0);
+        const du = payment - nopve;
+
+        return {
+          'STT': index + 1,
+          'NGÀY CẤP': o.issue_date,
+          'HIỆU LỰC': o.effective_date,
+          'TÊN CHỦ XE': o.status === 'CANCELLED' ? `${o.vehicle_owner} (Đã hủy)` : o.vehicle_owner,
+          'BIỂN SỐ': o.license_plate,
+          'GTX / ĐKBS': o.gtx_dkbs || '',
+          'HIỆU XE / NĂM SX': o.hieu_xe_nam_sx || '',
+          'MĐSD (KKD/KD)': o.mdsd || '',
+          'VAY BANK': o.vay_bank || '',
+          'BẢO HIỂM': o.provider,
+          'HÌNH XE': o.hinh_xe || '',
+          'PHÍ HĐ': fee,
+          'NỘP VỀ': nopve,
+          'THANH TOÁN': payment > 0 ? payment : 'Cần nộp phí BH',
+          'DƯ': du,
+          'NGƯỜI NHẬN CK': o.vcx_payment_recipient || ''
+        };
+      }
+
       const baseFee = o.status === 'CANCELLED' ? 0 : ((o.tnds_fee / 1.1) + o.nn_fee);
       const commRate = o.commission_rate || 0;
       const commAmount = baseFee * (commRate / 100);
@@ -650,59 +693,160 @@ function AgencyStatementModal({ agency, onClose, users, orders }: { agency: User
         {/* Table Content */}
         <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 bg-white">
           <table className="w-full text-left border-collapse text-[10px]">
-            <thead className="sticky top-0 z-20 bg-sky-100 shadow-[0_1px_1px_rgba(0,0,0,0.05)]">
-              <tr className="bg-sky-100 border-b border-slate-300 text-[10px] font-bold text-slate-700">
-                <th className="px-2 py-2 text-center font-bold border-r border-slate-300 bg-sky-100 sticky left-0 z-20 w-8">
-                  <input 
-                    type="checkbox" 
-                    checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedIds(filteredOrders.map(o => o.id));
-                      } else {
-                        setSelectedIds([]);
-                      }
-                    }}
-                    className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                  />
-                </th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">STT</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">GCN</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">TÊN KHÁCH HÀNG</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">BIỂN SỐ</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">NGÀY CẤP</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">NGÀY HIỆU LỰC</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">PHÍ TNDS</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">LP NNTX</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">TỔNG PHÍ</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">TRẠNG THÁI</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">SDT KHÁCH</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">COD</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">VẬN CHUYỂN</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">HOA HỒNG (%)</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">NỘP VỀ</th>
-                <th className="px-2 py-2 text-center border-r border-slate-300">GHI CHÚ</th>
-                <th className="px-2 py-2 text-center">HÃNG</th>
-              </tr>
-            </thead>
+            {filterInsurance === 'VCX_OTO' ? (
+              <thead className="sticky top-0 z-20 bg-sky-100 shadow-[0_1px_1px_rgba(0,0,0,0.05)]">
+                <tr className="bg-sky-100 border-b border-slate-300 text-[10px] font-bold text-slate-700">
+                  <th className="px-2 py-2 text-center font-bold border-r border-slate-300 bg-sky-100 sticky left-0 z-20 w-8">
+                    <input 
+                      type="checkbox" 
+                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(filteredOrders.map(o => o.id));
+                        } else {
+                          setSelectedIds([]);
+                        }
+                      }}
+                      className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">STT</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">NGÀY CẤP</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">HIỆU LỰC</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">TÊN CHỦ XE</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">BIỂN SỐ</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">GTX / ĐKBS</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">HIỆU XE / NĂM SX</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">MĐSD (KKD/KD)</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">VAY BANK</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">BẢO HIỂM</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">HÌNH XE</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">PHÍ HĐ</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">NỘP VỀ</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">THANH TOÁN</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">DƯ</th>
+                  <th className="px-2 py-2 text-center">NGƯỜI NHẬN CK</th>
+                </tr>
+              </thead>
+            ) : (
+              <thead className="sticky top-0 z-20 bg-sky-100 shadow-[0_1px_1px_rgba(0,0,0,0.05)]">
+                <tr className="bg-sky-100 border-b border-slate-300 text-[10px] font-bold text-slate-700">
+                  <th className="px-2 py-2 text-center font-bold border-r border-slate-300 bg-sky-100 sticky left-0 z-20 w-8">
+                    <input 
+                      type="checkbox" 
+                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(filteredOrders.map(o => o.id));
+                        } else {
+                          setSelectedIds([]);
+                        }
+                      }}
+                      className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">STT</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">GCN</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">TÊN KHÁCH HÀNG</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">BIỂN SỐ</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">NGÀY CẤP</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">NGÀY HIỆU LỰC</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">PHÍ TNDS</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">LP NNTX</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">TỔNG PHÍ</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">TRẠNG THÁI</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">SDT KHÁCH</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">COD</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">VẬN CHUYỂN</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">HOA HỒNG (%)</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">NỘP VỀ</th>
+                  <th className="px-2 py-2 text-center border-r border-slate-300">GHI CHÚ</th>
+                  <th className="px-2 py-2 text-center">HÃNG</th>
+                </tr>
+              </thead>
+            )}
             <tbody className="divide-y divide-slate-200 bg-white">
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={18} className="px-6 py-8 text-center text-slate-500 font-medium">
+                  <td colSpan={filterInsurance === 'VCX_OTO' ? 17 : 18} className="px-6 py-8 text-center text-slate-500 font-medium">
                     Không tìm thấy đơn bảo hiểm nào
                   </td>
                 </tr>
               ) : filteredOrders.map((order, index) => {
-                const baseFee = order.status === 'CANCELLED' ? 0 : ((order.tnds_fee / 1.1) + order.nn_fee);
+                const isCancelled = order.status === 'CANCELLED';
+                const baseFee = isCancelled ? 0 : ((order.tnds_fee / 1.1) + order.nn_fee);
                 const commRate = order.commission_rate || 0;
                 const commAmount = baseFee * (commRate / 100);
-                const totalFeeVal = order.status === 'CANCELLED' ? 0 : order.total_fee;
-                const shippingVal = order.status === 'CANCELLED' ? 0 : order.shipping_fee;
-                const codVal = order.status === 'CANCELLED' ? 0 : order.cod_amount;
+                const totalFeeVal = isCancelled ? 0 : order.total_fee;
+                const shippingVal = isCancelled ? 0 : order.shipping_fee;
+                const codVal = isCancelled ? 0 : order.cod_amount;
                 const nopVe = Math.round(totalFeeVal - commAmount + shippingVal - codVal);
 
+                if (filterInsurance === 'VCX_OTO') {
+                  const fee = isCancelled ? 0 : order.total_fee;
+                  const nopve = isCancelled ? 0 : (order.vcx_nop_ve || 0);
+                  const payment = isCancelled ? 0 : (order.vcx_payment || 0);
+                  const du = payment - nopve;
+                  const hasPayment = (order.vcx_payment !== undefined && order.vcx_payment !== null && order.vcx_payment > 0);
+
+                  return (
+                    <tr key={order.id} className={`hover:bg-slate-50 bg-white transition-colors ${isCancelled ? 'line-through text-slate-400' : ''}`}>
+                      <td className="px-2 py-1.5 text-center border-r border-slate-200 w-8">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedIds.includes(order.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedIds(prev => [...prev, order.id]);
+                            } else {
+                              setSelectedIds(prev => prev.filter(id => id !== order.id));
+                            }
+                          }}
+                          className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 text-center border-r border-slate-200">{index + 1}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">
+                        {order.issue_date ? format(new Date(order.issue_date), 'dd/MM/yyyy') : '-'}
+                      </td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">
+                        {order.effective_date ? format(new Date(order.effective_date), 'dd/MM/yyyy') : '-'}
+                      </td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 truncate max-w-[120px]" title={order.vehicle_owner}>
+                        {order.vehicle_owner}
+                      </td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center font-semibold text-slate-800">{order.license_plate || '-'}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">{order.gtx_dkbs || '-'}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">{order.hieu_xe_nam_sx || '-'}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">{order.mdsd || '-'}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">{order.vay_bank || '-'}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center">{order.provider || '-'}</td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-center truncate max-w-[80px]" title={order.hinh_xe}>
+                        {order.hinh_xe || '-'}
+                      </td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-right font-semibold text-slate-900">
+                        {new Intl.NumberFormat('vi-VN').format(fee)}
+                      </td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-right font-semibold text-slate-900">
+                        {new Intl.NumberFormat('vi-VN').format(nopve)}
+                      </td>
+                      <td className="px-2 py-1.5 border-r border-slate-200 text-right font-semibold">
+                        {hasPayment ? (
+                          <span className="text-slate-900">{new Intl.NumberFormat('vi-VN').format(payment)}</span>
+                        ) : (
+                          <span className="text-red-600 font-bold">Cần nộp phí BH</span>
+                        )}
+                      </td>
+                      <td className={`px-2 py-1.5 border-r border-slate-200 text-right font-bold ${du < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                        {new Intl.NumberFormat('vi-VN').format(du)}
+                      </td>
+                      <td className="px-2 py-1.5 text-center text-slate-600">{order.vcx_payment_recipient || '-'}</td>
+                    </tr>
+                  );
+                }
+
                 return (
-                  <tr key={order.id} className="hover:bg-slate-50 bg-white transition-colors">
+                  <tr key={order.id} className={`hover:bg-slate-50 bg-white transition-colors ${isCancelled ? 'line-through text-slate-400' : ''}`}>
                     <td className="px-2 py-1.5 text-center border-r border-slate-200 w-8">
                       <input 
                         type="checkbox" 
@@ -723,9 +867,9 @@ function AgencyStatementModal({ agency, onClose, users, orders }: { agency: User
                     <td className="px-2 py-1.5 border-r border-slate-200 text-center font-semibold text-slate-800">{order.license_plate || '-'}</td>
                     <td className="px-2 py-1.5 border-r border-slate-200 text-center">{format(new Date(order.issue_date), 'dd/MM/yyyy')}</td>
                     <td className="px-2 py-1.5 border-r border-slate-200 text-center">{format(new Date(order.effective_date), 'dd/MM/yyyy')}</td>
-                    <td className="px-2 py-1.5 border-r border-slate-200 text-right font-medium">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.tnds_fee)}</td>
-                    <td className="px-2 py-1.5 border-r border-slate-200 text-right font-medium">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.nn_fee)}</td>
-                    <td className="px-2 py-1.5 border-r border-slate-200 text-right font-semibold text-slate-900">{new Intl.NumberFormat('vi-VN').format(order.status === 'CANCELLED' ? 0 : order.total_fee)}</td>
+                    <td className="px-2 py-1.5 border-r border-slate-200 text-right font-medium">{new Intl.NumberFormat('vi-VN').format(isCancelled ? 0 : order.tnds_fee)}</td>
+                    <td className="px-2 py-1.5 border-r border-slate-200 text-right font-medium">{new Intl.NumberFormat('vi-VN').format(isCancelled ? 0 : order.nn_fee)}</td>
+                    <td className="px-2 py-1.5 border-r border-slate-200 text-right font-semibold text-slate-900">{new Intl.NumberFormat('vi-VN').format(isCancelled ? 0 : order.total_fee)}</td>
                     <td className="px-2 py-1.5 border-r border-slate-200 text-center">
                       <div className="flex flex-col gap-0.5 items-center">
                         <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
@@ -733,7 +877,7 @@ function AgencyStatementModal({ agency, onClose, users, orders }: { agency: User
                         }`}>
                           {order.status === 'ACTIVE' ? 'Hiệu lực' : 'Đã hủy'}
                         </span>
-                        {order.status !== 'CANCELLED' && (
+                        {!isCancelled && (
                           <span className={`text-[9px] font-semibold mt-0.5 ${order.cod_amount > 0 || order.payment_status === 'PAID' ? 'text-emerald-600' : order.payment_status === 'PARTIAL' ? 'text-amber-600' : 'text-red-500'}`}>
                             {order.cod_amount > 0 || order.payment_status === 'PAID' ? 'Đã TT' : order.payment_status === 'PARTIAL' ? 'TT 1 phần' : 'Chưa TT'}
                           </span>
@@ -758,26 +902,49 @@ function AgencyStatementModal({ agency, onClose, users, orders }: { agency: User
         <div className="bg-white border-t border-slate-200 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 flex-shrink-0">
           {/* Stat summary widgets */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 flex-1 max-w-4xl text-center">
-            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-              <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng phí doanh thu</p>
-              <p className="text-sm font-bold text-slate-900 mt-0.5">{formatCurrency(totals.totalFee)}</p>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-              <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng COD</p>
-              <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(totals.totalCod)}</p>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-              <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng Vận chuyển</p>
-              <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(totals.totalShip)}</p>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-              <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng hoa hồng chi</p>
-              <p className="text-sm font-bold text-amber-700 mt-0.5">{formatCurrency(totals.totalComm)}</p>
-            </div>
-            <div className="bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
-              <p className="text-[10px] text-emerald-600 font-semibold uppercase">Tổng thực nộp về</p>
-              <p className="text-sm font-bold text-emerald-700 mt-0.5">{formatCurrency(totals.totalNop)}</p>
-            </div>
+            {filterInsurance === 'VCX_OTO' ? (
+              <>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng phí HĐ</p>
+                  <p className="text-sm font-bold text-slate-900 mt-0.5">{formatCurrency(totals.totalFee)}</p>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng Nộp về</p>
+                  <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(totals.totalNop)}</p>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng Thanh toán</p>
+                  <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(totals.totalPayment)}</p>
+                </div>
+                <div className={`p-2.5 rounded-lg border ${totals.totalDu >= 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                  <p className="text-[10px] font-semibold uppercase">Tổng Dư</p>
+                  <p className="text-sm font-bold mt-0.5">{formatCurrency(totals.totalDu)}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng phí doanh thu</p>
+                  <p className="text-sm font-bold text-slate-900 mt-0.5">{formatCurrency(totals.totalFee)}</p>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng COD</p>
+                  <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(totals.totalCod)}</p>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng Vận chuyển</p>
+                  <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(totals.totalShip)}</p>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <p className="text-[10px] text-slate-500 font-semibold uppercase">Tổng hoa hồng chi</p>
+                  <p className="text-sm font-bold text-amber-700 mt-0.5">{formatCurrency(totals.totalComm)}</p>
+                </div>
+                <div className="bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
+                  <p className="text-[10px] text-emerald-600 font-semibold uppercase">Tổng thực nộp về</p>
+                  <p className="text-sm font-bold text-emerald-700 mt-0.5">{formatCurrency(totals.totalNop)}</p>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="flex gap-2.5 self-end md:self-center">

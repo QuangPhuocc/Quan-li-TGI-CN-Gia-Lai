@@ -203,12 +203,28 @@ export default function Orders() {
         }
       }
       
+      if (currentOrder.insurance_type === 'VCX_OTO') {
+        if (field === 'vcx_payment' || field === 'vcx_nop_ve') {
+          const payment = Number(field === 'vcx_payment' ? value : (rowUpdates.vcx_payment !== undefined ? rowUpdates.vcx_payment : currentOrder.vcx_payment || 0));
+          const nopve = Number(field === 'vcx_nop_ve' ? value : (rowUpdates.vcx_nop_ve !== undefined ? rowUpdates.vcx_nop_ve : currentOrder.vcx_nop_ve || 0));
+          if (payment === 0) {
+            rowUpdates.payment_status = 'UNPAID';
+          } else if (payment < nopve) {
+            rowUpdates.payment_status = 'PARTIAL';
+          } else {
+            rowUpdates.payment_status = 'PAID';
+          }
+        }
+      }
+
       if (field === 'status' && value === 'CANCELLED') {
         rowUpdates.tnds_fee = 0;
         rowUpdates.nn_fee = 0;
         rowUpdates.total_fee = 0;
         rowUpdates.cod_amount = 0;
         rowUpdates.shipping_fee = 0;
+        rowUpdates.vcx_nop_ve = 0;
+        rowUpdates.vcx_payment = 0;
       }
       
       return { ...prev, [id]: rowUpdates };
@@ -323,6 +339,19 @@ export default function Orders() {
       if (filterStatus === 'NEEDS_PROCESSING') {
         result = result.filter(o => {
           if (o.status === 'CANCELLED') return false;
+
+          if (o.insurance_type === 'VCX_OTO') {
+            return !o.vehicle_owner || 
+                   !o.license_plate || 
+                   !o.issue_date || 
+                   !o.effective_date || 
+                   !o.provider || 
+                   !o.hinh_xe || 
+                   !o.total_fee || 
+                   o.vcx_nop_ve === undefined || o.vcx_nop_ve === null ||
+                   o.vcx_payment === undefined || o.vcx_payment === null || o.vcx_payment === 0;
+          }
+
           const oStaff = users.find(u => u.id === o.staff_id);
           const isCTV = oStaff?.role === 'CTV';
           
@@ -486,6 +515,34 @@ export default function Orders() {
       const codVal = o.status === 'CANCELLED' ? 0 : o.cod_amount;
       const nopVe = Math.round(totalFeeVal - commAmount + shippingVal - codVal);
 
+      if (filterInsurance === 'VCX_OTO') {
+        const fee = o.status === 'CANCELLED' ? 0 : o.total_fee;
+        const nopve = o.status === 'CANCELLED' ? 0 : (o.vcx_nop_ve || 0);
+        const payment = o.status === 'CANCELLED' ? 0 : (o.vcx_payment || 0);
+        const du = payment - nopve;
+
+        return {
+          'STT': index + 1,
+          'NGÀY CẤP': o.issue_date,
+          'HIỆU LỰC': o.effective_date,
+          'TÊN CHỦ XE': o.status === 'CANCELLED' ? `${o.vehicle_owner} (Đã hủy)` : o.vehicle_owner,
+          'BIỂN SỐ': o.license_plate,
+          'GTX / ĐKBS': o.gtx_dkbs || '',
+          'HIỆU XE / NĂM SX': o.hieu_xe_nam_sx || '',
+          'MĐSD (KKD/KD)': o.mdsd || '',
+          'VAY BANK': o.vay_bank || '',
+          'BẢO HIỂM': o.provider,
+          'HÌNH XE': o.hinh_xe || '',
+          'PHÍ HĐ': fee,
+          'NỘP VỀ': nopve,
+          'THANH TOÁN': payment > 0 ? payment : 'Cần nộp phí BH',
+          'DƯ': du,
+          'NGƯỜI NHẬN CK': o.vcx_payment_recipient || '',
+          'NGƯỜI CẤP': staffName,
+          'ĐẠI LÝ': agencyName
+        };
+      }
+
       return {
         'STT': index + 1,
         'Số Seri/GCN': o.serial_number,
@@ -591,9 +648,9 @@ export default function Orders() {
             mapping['tnds_fee'] = colIdx;
           } else if (/lp\s*nntx|lệ\s*phí\s*nntx|nntx|người\s*ngồi|nguoi\s*ngoi|phí\s*tự\s*nguyện|phi\s*tu\s*nguyen/i.test(cleanH)) {
             mapping['nn_fee'] = colIdx;
-          } else if (/tổng\s*phí|tong\s*phi|thành\s*tiền|thanh\s*tien|tổng\s*cộng|tong\s*cong/i.test(cleanH)) {
+          } else if (/phí\s*hđ|phi\s*hd|phí\s*hợp\s*đồng|phi\s*hop\s*dong|tổng\s*phí|tong\s*phi|thành\s*tiền|thanh\s*tien|tổng\s*cộng|tong\s*cong/i.test(cleanH)) {
             mapping['total_fee'] = colIdx;
-          } else if (/hãng|hang|provider/i.test(cleanH)) {
+          } else if (/hãng|hang|provider|bảo\s*hiểm|bao\s*hiem/i.test(cleanH)) {
             mapping['provider'] = colIdx;
           } else if (/nhân\s*viên|nhan\s*vien|người\s*cấp|nguoi\s*cap|nv/i.test(cleanH)) {
             mapping['staff_id'] = colIdx;
@@ -611,11 +668,27 @@ export default function Orders() {
             mapping['payment_status'] = colIdx;
           } else if (/trạng\s*thái\s*đơn|trạng\s*thái|trang\s*thai/i.test(cleanH)) {
             mapping['status'] = colIdx;
+          } else if (/gtx|đkbs/i.test(cleanH)) {
+            mapping['gtx_dkbs'] = colIdx;
+          } else if (/hiệu\s*xe|năm\s*sx/i.test(cleanH)) {
+            mapping['hieu_xe_nam_sx'] = colIdx;
+          } else if (/mđsd|mục\s*đích/i.test(cleanH)) {
+            mapping['mdsd'] = colIdx;
+          } else if (/vay\s*bank|ngân\s*hàng/i.test(cleanH)) {
+            mapping['vay_bank'] = colIdx;
+          } else if (/hình\s*xe|ảnh\s*xe/i.test(cleanH)) {
+            mapping['hinh_xe'] = colIdx;
+          } else if (/nộp\s*về|nop\s*ve/i.test(cleanH)) {
+            mapping['vcx_nop_ve'] = colIdx;
+          } else if (/thanh\s*toán|thanh\s*toan/i.test(cleanH)) {
+            mapping['vcx_payment'] = colIdx;
+          } else if (/người\s*nhận\s*ck|nguoi\s*nhan\s*ck|nhận\s*ck/i.test(cleanH)) {
+            mapping['vcx_payment_recipient'] = colIdx;
           }
         });
 
         // Warn if basic fields are missing
-        if (mapping['serial_number'] === undefined) {
+        if (mapping['serial_number'] === undefined && filterInsurance !== 'VCX_OTO') {
           alert('Không tìm thấy cột Số Seri/GCN trong file Excel');
           return;
         }
@@ -636,14 +709,20 @@ export default function Orders() {
             return idx !== undefined ? row[idx] : undefined;
           };
 
-          const serial_number = String(getVal('serial_number') || '').trim();
+          const license_plate = String(getVal('license_plate') || '').trim();
+          let serial_number = String(getVal('serial_number') || '').trim();
+          
           if (!serial_number) {
-            warnings.push({ rowIdx: i + 1, message: `Dòng ${i + 1}: Không có Số Seri (Bỏ qua)`, severity: 'error' });
-            continue;
+            if (filterInsurance === 'VCX_OTO') {
+              const cleanPlate = license_plate ? license_plate.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+              serial_number = `VCX-${cleanPlate || 'TEMP'}-${Date.now().toString().slice(-4)}-${Math.floor(Math.random() * 1000)}`;
+            } else {
+              warnings.push({ rowIdx: i + 1, message: `Dòng ${i + 1}: Không có Số Seri (Bỏ qua)`, severity: 'error' });
+              continue;
+            }
           }
 
           const vehicle_owner = String(getVal('vehicle_owner') || '').trim();
-          const license_plate = String(getVal('license_plate') || '').trim();
           const provider = String(getVal('provider') || '').trim();
           const customer_phone = String(getVal('customer_phone') || '').trim();
           const notes = String(getVal('notes') || '').trim();
@@ -679,7 +758,6 @@ export default function Orders() {
             if (foundStaff) {
               staff_id = foundStaff.id;
             } else {
-              // Keep original name so we can highlight it in red and edit in preview modal
               staff_id = staffNameVal;
               warnings.push({ rowIdx: i + 1, message: `Dòng ${i + 1}: Không tìm thấy nhân viên "${staffNameVal}" trong danh sách hệ thống.`, severity: 'warning' });
             }
@@ -697,7 +775,6 @@ export default function Orders() {
             if (foundAgency) {
               agency_id = foundAgency.id;
             } else {
-              // Unregistered agency names are kept directly without warning
               agency_id = agencyNameVal;
             }
           }
@@ -712,16 +789,28 @@ export default function Orders() {
             status = 'CANCELLED';
           }
 
-          // Resolve Payment Status: COD > 0 means PAID
+          // Resolve Payment Status
           let payment_status: any = 'UNPAID';
-          if (cod_amount > 0) {
-            payment_status = 'PAID';
-          } else {
-            const payVal = String(getVal('payment_status') || '').trim().toLowerCase();
-            if (payVal.includes('đã') || payVal.includes('da') || payVal.includes('paid') || payVal.includes('rồi')) {
-              payment_status = 'PAID';
-            } else if (payVal.includes('phần') || payVal.includes('phan') || payVal.includes('partial')) {
+          if (insurance_type === 'VCX_OTO') {
+            const vcxPaymentVal = parseExcelNumber(getVal('vcx_payment'));
+            const vcxNopVeVal = parseExcelNumber(getVal('vcx_nop_ve'));
+            if (vcxPaymentVal === 0) {
+              payment_status = 'UNPAID';
+            } else if (vcxPaymentVal < vcxNopVeVal) {
               payment_status = 'PARTIAL';
+            } else {
+              payment_status = 'PAID';
+            }
+          } else {
+            if (cod_amount > 0) {
+              payment_status = 'PAID';
+            } else {
+              const payVal = String(getVal('payment_status') || '').trim().toLowerCase();
+              if (payVal.includes('đã') || payVal.includes('da') || payVal.includes('paid') || payVal.includes('rồi')) {
+                payment_status = 'PAID';
+              } else if (payVal.includes('phần') || payVal.includes('phan') || payVal.includes('partial')) {
+                payment_status = 'PARTIAL';
+              }
             }
           }
 
@@ -748,7 +837,16 @@ export default function Orders() {
             notes,
             created_by: user!.fullname,
             created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            // VCX specific fields
+            gtx_dkbs: String(getVal('gtx_dkbs') || '').trim() || undefined,
+            hieu_xe_nam_sx: String(getVal('hieu_xe_nam_sx') || '').trim() || undefined,
+            mdsd: String(getVal('mdsd') || '').trim() || undefined,
+            vay_bank: String(getVal('vay_bank') || '').trim() || undefined,
+            hinh_xe: String(getVal('hinh_xe') || '').trim() || undefined,
+            vcx_nop_ve: getVal('vcx_nop_ve') !== undefined ? parseExcelNumber(getVal('vcx_nop_ve')) : undefined,
+            vcx_payment: getVal('vcx_payment') !== undefined ? parseExcelNumber(getVal('vcx_payment')) : undefined,
+            vcx_payment_recipient: String(getVal('vcx_payment_recipient') || '').trim() || undefined,
           };
 
           const isSystemDup = orders.some(o => o.serial_number && o.serial_number.toLowerCase() === serial_number.toLowerCase());
@@ -1034,47 +1132,85 @@ export default function Orders() {
         <div className="overflow-x-auto overflow-y-auto flex-1 w-full">
           <table className="w-full text-left border-collapse text-[11px]">
             <thead className="sticky top-0 z-20 bg-sky-100 shadow-[0_2px_2px_-1px_rgba(0,0,0,0.1)]">
-              <tr className="bg-sky-100 border-b border-slate-300 text-[11px] font-bold text-slate-700">
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20 w-8">
-                  <input 
-                    type="checkbox" 
-                    checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedIds(filteredOrders.map(o => o.id));
-                      } else {
-                        setSelectedIds([]);
-                      }
-                    }}
-                    className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                  />
-                </th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">STT</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GCN</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TÊN KHÁCH HÀNG</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">BIỂN SỐ</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGÀY CẤP</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGÀY HIỆU LỰC</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">PHÍ TNDS</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">LP NNTX</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TỔNG PHÍ</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TRẠNG THÁI</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGƯỜI CẤP</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">ĐẠI LÝ</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">SDT</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">COD</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">VẬN CHUYỂN</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HOA HỒNG (%)</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NỘP VỀ</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GHI CHÚ</th>
-                <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HÃNG</th>
-                <th className="px-1 py-1.5 text-center border-l-2 border-slate-300 sticky top-0 right-0 bg-sky-100 z-30 font-bold shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.1)]">Thao tác</th>
-              </tr>
+              {filterInsurance === 'VCX_OTO' ? (
+                <tr className="bg-sky-100 border-b border-slate-300 text-[11px] font-bold text-slate-700">
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20 w-8">
+                    <input 
+                      type="checkbox" 
+                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(filteredOrders.map(o => o.id));
+                        } else {
+                          setSelectedIds([]);
+                        }
+                      }}
+                      className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">STT</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGÀY CẤP</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HIỆU LỰC</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TÊN CHỦ XE</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">BIỂN SỐ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GTX / ĐKBS</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HIỆU XE / NĂM SX</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">MĐSD (KKD/KD)</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">VAY BANK</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">BẢO HIỂM</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HÌNH XE</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">PHÍ HĐ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NỘP VỀ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">THANH TOÁN</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">DƯ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGƯỜI NHẬN CK</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGƯỜI CẤP</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">ĐẠI LÝ</th>
+                  <th className="px-1 py-1.5 text-center border-l-2 border-slate-300 sticky top-0 right-0 bg-sky-100 z-30 font-bold shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.1)]">Thao tác</th>
+                </tr>
+              ) : (
+                <tr className="bg-sky-100 border-b border-slate-300 text-[11px] font-bold text-slate-700">
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20 w-8">
+                    <input 
+                      type="checkbox" 
+                      checked={filteredOrders.length > 0 && selectedIds.length === filteredOrders.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(filteredOrders.map(o => o.id));
+                        } else {
+                          setSelectedIds([]);
+                        }
+                      }}
+                      className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">STT</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GCN</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TÊN KHÁCH HÀNG</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">BIỂN SỐ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGÀY CẤP</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGÀY HIỆU LỰC</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">PHÍ TNDS</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">LP NNTX</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TỔNG PHÍ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">TRẠNG THÁI</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NGƯỜI CẤP</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">ĐẠI LÝ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">SDT</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">COD</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">VẬN CHUYỂN</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HOA HỒNG (%)</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">NỘP VỀ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">GHI CHÚ</th>
+                  <th className="px-1 py-1.5 text-center font-bold border-r border-slate-300 bg-sky-100 sticky top-0 z-20">HÃNG</th>
+                  <th className="px-1 py-1.5 text-center border-l-2 border-slate-300 sticky top-0 right-0 bg-sky-100 z-30 font-bold shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.1)]">Thao tác</th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-slate-200 text-sm">
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={20} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={filterInsurance === 'VCX_OTO' ? 20 : 21} className="px-6 py-8 text-center text-slate-500">
                     Không tìm thấy đơn bảo hiểm nào
                   </td>
                 </tr>
@@ -1082,8 +1218,197 @@ export default function Orders() {
                 const staffName = users.find(u => u.id === order.staff_id)?.fullname || '';
                 const foundAgency = users.find(u => u.id === order.agency_id);
                 const agencyName = foundAgency ? foundAgency.fullname : (order.agency_id || '');
+                const isCancelled = order.status === 'CANCELLED';
                 
                 if (isEditMode) {
+                  if (filterInsurance === 'VCX_OTO') {
+                    const feeVal = Number(getEditValue(order.id, 'total_fee', order.total_fee));
+                    const nopveVal = Number(getEditValue(order.id, 'vcx_nop_ve', order.vcx_nop_ve || 0));
+                    const paymentVal = Number(getEditValue(order.id, 'vcx_payment', order.vcx_payment || 0));
+                    const duVal = paymentVal - nopveVal;
+
+                    return (
+                      <tr key={order.id} className={`hover:bg-slate-50 transition-colors bg-white ${isCancelled ? 'line-through text-slate-400 font-normal' : ''}`}>
+                        <td className="px-1 py-0.5 text-center border-r border-slate-200 w-8">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedIds.includes(order.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedIds(prev => [...prev, order.id]);
+                              } else {
+                                setSelectedIds(prev => prev.filter(id => id !== order.id));
+                              }
+                            }}
+                            className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 text-center border-r border-slate-200 font-medium">{index + 1}</td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="date" 
+                            value={getEditValue(order.id, 'issue_date', order.issue_date)} 
+                            onChange={(e) => handleCellChange(order.id, 'issue_date', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="date" 
+                            value={getEditValue(order.id, 'effective_date', order.effective_date)} 
+                            onChange={(e) => handleCellChange(order.id, 'effective_date', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'vehicle_owner', order.vehicle_owner)} 
+                            onChange={(e) => handleCellChange(order.id, 'vehicle_owner', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px]"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'license_plate', order.license_plate)} 
+                            onChange={(e) => handleCellChange(order.id, 'license_plate', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'gtx_dkbs', order.gtx_dkbs || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'gtx_dkbs', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'hieu_xe_nam_sx', order.hieu_xe_nam_sx || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'hieu_xe_nam_sx', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'mdsd', order.mdsd || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'mdsd', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'vay_bank', order.vay_bank || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'vay_bank', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'provider', order.provider)} 
+                            onChange={(e) => handleCellChange(order.id, 'provider', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'hinh_xe', order.hinh_xe || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'hinh_xe', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px]"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="number" 
+                            value={getEditValue(order.id, 'total_fee', order.total_fee)} 
+                            onChange={(e) => handleCellChange(order.id, 'total_fee', Number(e.target.value))}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right font-medium"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="number" 
+                            value={getEditValue(order.id, 'vcx_nop_ve', order.vcx_nop_ve || 0)} 
+                            onChange={(e) => handleCellChange(order.id, 'vcx_nop_ve', Number(e.target.value))}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right font-medium"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="number" 
+                            value={getEditValue(order.id, 'vcx_payment', order.vcx_payment || 0)} 
+                            onChange={(e) => handleCellChange(order.id, 'vcx_payment', Number(e.target.value))}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right font-medium"
+                          />
+                        </td>
+                        <td className={`px-1 py-0.5 border-r border-slate-200 text-right font-bold ${duVal < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {new Intl.NumberFormat('vi-VN').format(duVal)}
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <input 
+                            type="text" 
+                            value={getEditValue(order.id, 'vcx_payment_recipient', order.vcx_payment_recipient || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'vcx_payment_recipient', e.target.value)}
+                            className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-center"
+                          />
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <select 
+                            value={getEditValue(order.id, 'staff_id', order.staff_id)} 
+                            onChange={(e) => handleCellChange(order.id, 'staff_id', e.target.value)}
+                            className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
+                          >
+                            <option value="">Chưa phân công</option>
+                            {users.filter((u: any) => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV').map((u: any) => (
+                              <option key={u.id} value={u.id}>{u.fullname}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-1 py-0.5 border-r border-slate-200">
+                          <select 
+                            value={getEditValue(order.id, 'agency_id', order.agency_id || '')} 
+                            onChange={(e) => handleCellChange(order.id, 'agency_id', e.target.value || undefined)}
+                            className="w-full px-0.5 py-0.5 border border-slate-300 rounded text-[10px]"
+                          >
+                            <option value="">Không có</option>
+                            {users.filter((u: any) => u.role === 'AGENCY').map((u: any) => (
+                              <option key={u.id} value={u.id}>{u.fullname}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-1 py-1 text-center sticky right-0 bg-white border-l-2 border-slate-200 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.05)] z-10">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button 
+                              onClick={() => setHistoryOrderId(order.id)}
+                              className="p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer" title="Lịch sử thay đổi"
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                            </button>
+                            {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+                              <button 
+                                onClick={() => {
+                                  if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                                    deleteOrder(order.id, user!.fullname);
+                                  }
+                                }}
+                                className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
                   return (
                     <tr key={order.id} className="hover:bg-slate-50 transition-colors bg-white">
                       <td className="px-1 py-0.5 text-center border-r border-slate-200 w-8">
@@ -1235,6 +1560,14 @@ export default function Orders() {
                       <td className="px-1 py-0.5 border-r border-slate-200">
                         <input 
                           type="number" 
+                          value={getEditValue(order.id, 'shipping_fee', order.shipping_fee)} 
+                          onChange={(e) => handleCellChange(order.id, 'shipping_fee', Number(e.target.value))}
+                          className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 border-r border-slate-200">
+                        <input 
+                          type="number" 
                           value={getEditValue(order.id, 'commission_rate', order.commission_rate || 0)} 
                           onChange={(e) => handleCellChange(order.id, 'commission_rate', Number(e.target.value))}
                           className="w-full px-1 py-0.5 border border-slate-300 rounded text-[10px] text-right"
@@ -1285,6 +1618,104 @@ export default function Orders() {
                           >
                             <Clock className="w-3.5 h-3.5" />
                           </button>
+                          {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn thẻ của chủ xe: ${order.vehicle_owner}?`)) {
+                                  deleteOrder(order.id, user!.fullname);
+                                }
+                              }}
+                              className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer" title="Xóa vĩnh viễn"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
+                if (filterInsurance === 'VCX_OTO') {
+                  const fee = isCancelled ? 0 : order.total_fee;
+                  const nopve = isCancelled ? 0 : (order.vcx_nop_ve || 0);
+                  const payment = isCancelled ? 0 : (order.vcx_payment || 0);
+                  const du = payment - nopve;
+                  const hasPayment = (order.vcx_payment !== undefined && order.vcx_payment !== null && order.vcx_payment > 0);
+
+                  return (
+                    <tr key={order.id} className={`hover:bg-slate-50 transition-colors bg-white ${isCancelled ? 'line-through text-slate-400' : ''}`}>
+                      <td className="px-1 py-1 text-center border-r border-slate-200 w-8">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedIds.includes(order.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedIds(prev => [...prev, order.id]);
+                            } else {
+                              setSelectedIds(prev => prev.filter(id => id !== order.id));
+                            }
+                          }}
+                          className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-1 py-1 text-center border-r border-slate-200">{index + 1}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.issue_date ? format(new Date(order.issue_date), 'dd/MM/yyyy') : '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.effective_date ? format(new Date(order.effective_date), 'dd/MM/yyyy') : '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[120px]" title={order.vehicle_owner}>
+                        {searchTerm ? highlightText(order.vehicle_owner, searchTerm) : order.vehicle_owner}
+                      </td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center font-semibold text-slate-800">
+                        {searchTerm ? highlightText(order.license_plate || '-', searchTerm) : (order.license_plate || '-')}
+                      </td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.gtx_dkbs || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.hieu_xe_nam_sx || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.mdsd || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.vay_bank || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center">{order.provider || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[80px]" title={order.hinh_xe}>{order.hinh_xe || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-right font-semibold text-slate-900">{new Intl.NumberFormat('vi-VN').format(fee)}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-right font-semibold text-slate-900">{new Intl.NumberFormat('vi-VN').format(nopve)}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-right font-semibold">
+                        {hasPayment ? (
+                          <span className="text-slate-900">{new Intl.NumberFormat('vi-VN').format(payment)}</span>
+                        ) : (
+                          <span className="text-red-600 font-bold">Cần nộp phí BH</span>
+                        )}
+                      </td>
+                      <td className={`px-1 py-1 border-r border-slate-200 text-right font-bold ${du < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                        {new Intl.NumberFormat('vi-VN').format(du)}
+                      </td>
+                      <td className="px-1 py-1 border-r border-slate-200 text-center text-slate-600">{order.vcx_payment_recipient || '-'}</td>
+                      <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[90px]" title={staffName}>
+                        {searchTerm ? highlightText(staffName || 'Chưa phân công', searchTerm) : (staffName || <span className="text-red-500 font-medium">Chưa phân công</span>)}
+                      </td>
+                      <td className="px-1 py-1 border-r border-slate-200 truncate max-w-[90px]" title={agencyName}>
+                        {searchTerm ? highlightText(agencyName || 'Không có', searchTerm) : (agencyName || <span className="text-slate-400">Không có</span>)}
+                      </td>
+                      <td className="px-1 py-1 text-center sticky right-0 bg-white border-l-2 border-slate-200 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.05)] z-10">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button 
+                            onClick={() => setHistoryOrderId(order.id)}
+                            className="p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer" title="Lịch sử thay đổi"
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                          </button>
+                          {order.status === 'ACTIVE' ? (
+                            <button 
+                              onClick={() => handleStatusChange(order.id, 'CANCELLED')}
+                              className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer" title="Hủy thẻ"
+                            >
+                              <Trash className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={() => handleStatusChange(order.id, 'ACTIVE')}
+                              className="p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer" title="Khôi phục"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           {(user?.role === 'MASTER' || user?.role === 'ACCOUNTANT') && (
                             <button 
                               onClick={() => {
@@ -1513,17 +1944,29 @@ function StatusBadge({ status, notes, order }: { status: string, notes?: string,
   // Check processing reasons for non-cancelled orders
   const reasons: string[] = [];
   if (order) {
-    const staffUser = users.find(u => u.id === order.staff_id);
-    const isCTV = staffUser?.role === 'CTV';
+    if (order.insurance_type === 'VCX_OTO') {
+      if (!order.vehicle_owner) reasons.push("Thiếu chủ xe");
+      if (!order.license_plate) reasons.push("Thiếu biển số");
+      if (!order.issue_date) reasons.push("Thiếu ngày cấp");
+      if (!order.effective_date) reasons.push("Thiếu hiệu lực");
+      if (!order.provider) reasons.push("Thiếu bảo hiểm");
+      if (!order.hinh_xe) reasons.push("Thiếu hình xe");
+      if (!order.total_fee) reasons.push("Thiếu phí HĐ");
+      if (order.vcx_nop_ve === undefined || order.vcx_nop_ve === null) reasons.push("Thiếu Nộp về");
+      if (order.vcx_payment === undefined || order.vcx_payment === null || order.vcx_payment === 0) reasons.push("Thiếu Thanh toán");
+    } else {
+      const staffUser = users.find(u => u.id === order.staff_id);
+      const isCTV = staffUser?.role === 'CTV';
 
-    if (!order.staff_id) {
-      reasons.push("Chưa điền Người cấp");
-    }
-    if (!isCTV && !order.customer_phone && !order.agency_id) {
-      reasons.push("Chưa điền Đại lý/SDT");
-    }
-    if (order.tnds_fee === 0 || order.total_fee === 0) {
-      reasons.push("Chưa điền Phí BH");
+      if (!order.staff_id) {
+        reasons.push("Chưa điền Người cấp");
+      }
+      if (!isCTV && !order.customer_phone && !order.agency_id) {
+        reasons.push("Chưa điền Đại lý/SDT");
+      }
+      if (order.tnds_fee === 0 || order.total_fee === 0) {
+        reasons.push("Chưa điền Phí BH");
+      }
     }
   }
 
@@ -1575,13 +2018,21 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
     payment_status: order?.payment_status || 'UNPAID',
     status: order?.status || 'ACTIVE',
     notes: order?.notes || '',
+    gtx_dkbs: order?.gtx_dkbs || '',
+    hieu_xe_nam_sx: order?.hieu_xe_nam_sx || '',
+    mdsd: order?.mdsd || '',
+    vay_bank: order?.vay_bank || '',
+    hinh_xe: order?.hinh_xe || '',
+    vcx_nop_ve: order?.vcx_nop_ve || 0,
+    vcx_payment: order?.vcx_payment || 0,
+    vcx_payment_recipient: order?.vcx_payment_recipient || '',
   });
 
   const handleChange = (e: any) => {
     const { name, value } = e.target;
     let newValue: any = value;
     
-    if (['tnds_fee', 'nn_fee', 'cod_amount', 'shipping_fee', 'commission_rate'].includes(name)) {
+    if (['tnds_fee', 'nn_fee', 'cod_amount', 'shipping_fee', 'commission_rate', 'total_fee', 'vcx_nop_ve', 'vcx_payment'].includes(name)) {
       newValue = Number(value);
     }
     
@@ -1599,7 +2050,24 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
 
   const handleSubmit = (e: any) => {
     e.preventDefault();
-    onSave(formData);
+    const finalData = { ...formData };
+    if (finalData.insurance_type === 'VCX_OTO' && !finalData.serial_number) {
+      const cleanPlate = finalData.license_plate ? finalData.license_plate.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+      finalData.serial_number = `VCX-${cleanPlate || 'TEMP'}-${Date.now().toString().slice(-4)}-${Math.floor(Math.random() * 1000)}`;
+    }
+    
+    if (finalData.insurance_type === 'VCX_OTO') {
+      const p = Number(finalData.vcx_payment || 0);
+      const n = Number(finalData.vcx_nop_ve || 0);
+      if (p === 0) {
+        finalData.payment_status = 'UNPAID';
+      } else if (p < n) {
+        finalData.payment_status = 'PARTIAL';
+      } else {
+        finalData.payment_status = 'PAID';
+      }
+    }
+    onSave(finalData);
   };
 
   return (
@@ -1614,147 +2082,298 @@ function OrderFormModal({ order, onClose, onSave, users, currentUser, defaultSta
         
         <form onSubmit={handleSubmit} className="p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="space-y-4">
-              <h3 className="font-medium text-slate-900 border-b pb-2">Thông tin chung</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Loại nghiệp vụ <span className="text-red-500">*</span></label>
-                  <select required name="insurance_type" value={formData.insurance_type} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="TNDS_OTO">TNDS Ô tô</option>
-                    <option value="VCX_OTO">Vật chất xe Ô tô</option>
-                    <option value="TNDS_XEMAY">TNDS Xe máy</option>
-                    <option value="Y_TE">Bảo hiểm Y tế</option>
-                    <option value="ETC">Thẻ ETC</option>
-                    <option value="KHAC">Khác</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Bảng kê theo Tháng <span className="text-red-500">*</span></label>
-                  <select required name="statement_month" value={formData.statement_month} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                    {monthOptions.map(opt => (
-                      <option key={opt.key} value={opt.key}>{opt.label}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Số Seri / GCN <span className="text-red-500">*</span></label>
-                  <input required type="text" name="serial_number" value={formData.serial_number} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Hãng (Provider)</label>
-                  <input type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="VD: VIỄN ĐÔNG" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Ngày cấp <span className="text-red-500">*</span></label>
-                  <input required type="date" name="issue_date" value={formData.issue_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Ngày hiệu lực <span className="text-red-500">*</span></label>
-                  <input required type="date" name="effective_date" value={formData.effective_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-              </div>
-              
-              <h3 className="font-medium text-slate-900 border-b pb-2 mt-6">Thông tin khách hàng</h3>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Chủ xe / Tên KH <span className="text-red-500">*</span></label>
-                <input required type="text" name="vehicle_owner" value={formData.vehicle_owner} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Biển số xe</label>
-                  <input type="text" name="license_plate" value={formData.license_plate} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">SĐT Khách hàng</label>
-                  <input type="text" name="customer_phone" value={formData.customer_phone} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="font-medium text-slate-900 border-b pb-2">Thông tin phí & Thanh toán</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phí TNDS</label>
-                  <input type="number" name="tnds_fee" value={formData.tnds_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phí LP NNTX</label>
-                  <input type="number" name="nn_fee" value={formData.nn_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Tổng phí</label>
-                  <input type="number" readOnly value={formData.total_fee} className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm font-semibold text-slate-900" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Trạng thái thanh toán <span className="text-red-500">*</span></label>
-                  <select name="payment_status" value={formData.payment_status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="UNPAID">Chưa thanh toán</option>
-                    <option value="PARTIAL">Thanh toán 1 phần</option>
-                    <option value="PAID">Đã thanh toán</option>
-                  </select>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-4">
-                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Số tiền COD</label>
-                  <input type="number" name="cod_amount" value={formData.cod_amount} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Phí Vận chuyển</label>
-                  <input type="number" name="shipping_fee" value={formData.shipping_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Hoa hồng (%)</label>
-                  <input type="number" name="commission_rate" value={formData.commission_rate} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="%" />
-                </div>
-              </div>
-
-              <h3 className="font-medium text-slate-900 border-b pb-2 mt-6">Phân công & Ghi chú</h3>
-              {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
-                <div className="grid grid-cols-2 gap-4">
-                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
+            {formData.insurance_type === 'VCX_OTO' ? (
+              <>
+                <div className="space-y-4">
+                  <h3 className="font-medium text-slate-900 border-b pb-2">Thông tin Chung & Xe</h3>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Nhân viên (Người cấp)</label>
-                      <select name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                        <option value="">Chọn nhân viên...</option>
-                        {users.filter((u: any) => {
-                          if (currentUser.role === 'STAFF') {
-                            return u.role === 'STAFF';
-                          }
-                          if (currentUser.role === 'CTV') {
-                            return u.role === 'CTV';
-                          }
-                          return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV';
-                        }).map((u: any) => (
-                          <option key={u.id} value={u.id}>{u.fullname}</option>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Loại nghiệp vụ <span className="text-red-500">*</span></label>
+                      <select required name="insurance_type" value={formData.insurance_type} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+                        <option value="TNDS_OTO">TNDS Ô tô</option>
+                        <option value="VCX_OTO">Vật chất xe Ô tô</option>
+                        <option value="TNDS_XEMAY">TNDS Xe máy</option>
+                        <option value="Y_TE">Bảo hiểm Y tế</option>
+                        <option value="ETC">Thẻ ETC</option>
+                        <option value="KHAC">Khác</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Bảng kê theo Tháng <span className="text-red-500">*</span></label>
+                      <select required name="statement_month" value={formData.statement_month} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+                        {monthOptions.map(opt => (
+                          <option key={opt.key} value={opt.key}>{opt.label}</option>
                         ))}
                       </select>
                     </div>
-                  )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Ngày cấp <span className="text-red-500">*</span></label>
+                      <input required type="date" name="issue_date" value={formData.issue_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Ngày hiệu lực <span className="text-red-500">*</span></label>
+                      <input required type="date" name="effective_date" value={formData.effective_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                    </div>
+                  </div>
+
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Đại lý</label>
-                    <select name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                      <option value="">Không có</option>
-                      {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
-                        <option key={u.id} value={u.id}>{u.fullname}</option>
-                      ))}
-                    </select>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Tên chủ xe <span className="text-red-500">*</span></label>
+                    <input required type="text" name="vehicle_owner" value={formData.vehicle_owner} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Biển số <span className="text-red-500">*</span></label>
+                      <input required type="text" name="license_plate" value={formData.license_plate} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Bảo hiểm / Hãng <span className="text-red-500">*</span></label>
+                      <input required type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: PVI, Bảo Việt..." />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">GTX / ĐKBS <span className="text-red-500">*</span></label>
+                      <input required type="text" name="gtx_dkbs" value={formData.gtx_dkbs} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: 500tr / đkbs..." />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Hiệu xe / Năm SX <span className="text-red-500">*</span></label>
+                      <input required type="text" name="hieu_xe_nam_sx" value={formData.hieu_xe_nam_sx} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: Toyota Vios / 2021" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">MĐSD (KD/KKD) <span className="text-red-500">*</span></label>
+                      <input required type="text" name="mdsd" value={formData.mdsd} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: KKD hoặc KD" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Vay bank</label>
+                      <input type="text" name="vay_bank" value={formData.vay_bank} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: BIDV (không bắt buộc)" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Hình xe <span className="text-red-500">*</span></label>
+                    <input required type="text" name="hinh_xe" value={formData.hinh_xe} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: Link hoặc mô tả hình xe" />
                   </div>
                 </div>
-              )}
-              
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Ghi chú / Mã Giao dịch</label>
-                <textarea name="notes" value={formData.notes} onChange={handleChange} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"></textarea>
-              </div>
-            </div>
+
+                <div className="space-y-4">
+                  <h3 className="font-medium text-slate-900 border-b pb-2">Thông tin tài chính & Phân công</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Phí HĐ <span className="text-red-500">*</span></label>
+                      <input required type="number" name="total_fee" value={formData.total_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Nộp về <span className="text-red-500">*</span></label>
+                      <input required type="number" name="vcx_nop_ve" value={formData.vcx_nop_ve} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Thanh toán <span className="text-red-500">*</span></label>
+                      <input required type="number" name="vcx_payment" value={formData.vcx_payment} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Người nhận CK</label>
+                      <input type="text" name="vcx_payment_recipient" value={formData.vcx_payment_recipient} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white" placeholder="VD: Tên tài khoản nhận (không bắt buộc)" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Trạng thái đơn</label>
+                    <select name="status" value={formData.status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+                      <option value="ACTIVE">Hiệu lực</option>
+                      <option value="CANCELLED">Đã hủy</option>
+                      <option value="NEEDS_PROCESSING">Cần xử lý</option>
+                    </select>
+                  </div>
+
+                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Nhân viên (Người cấp)</label>
+                        <select name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+                          <option value="">Chọn nhân viên...</option>
+                          {users.filter((u: any) => {
+                            if (currentUser.role === 'STAFF') return u.role === 'STAFF';
+                            if (currentUser.role === 'CTV') return u.role === 'CTV';
+                            return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV';
+                          }).map((u: any) => (
+                            <option key={u.id} value={u.id}>{u.fullname}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Đại lý</label>
+                        <select name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+                          <option value="">Không có</option>
+                          {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
+                            <option key={u.id} value={u.id}>{u.fullname}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Ghi chú</label>
+                    <textarea name="notes" value={formData.notes} onChange={handleChange} rows={3} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white"></textarea>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  <h3 className="font-medium text-slate-900 border-b pb-2">Thông tin chung</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Loại nghiệp vụ <span className="text-red-500">*</span></label>
+                      <select required name="insurance_type" value={formData.insurance_type} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+                        <option value="TNDS_OTO">TNDS Ô tô</option>
+                        <option value="VCX_OTO">Vật chất xe Ô tô</option>
+                        <option value="TNDS_XEMAY">TNDS Xe máy</option>
+                        <option value="Y_TE">Bảo hiểm Y tế</option>
+                        <option value="ETC">Thẻ ETC</option>
+                        <option value="KHAC">Khác</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Bảng kê theo Tháng <span className="text-red-500">*</span></label>
+                      <select required name="statement_month" value={formData.statement_month} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+                        {monthOptions.map(opt => (
+                          <option key={opt.key} value={opt.key}>{opt.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Số Seri / GCN <span className="text-red-500">*</span></label>
+                      <input required type="text" name="serial_number" value={formData.serial_number} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Hãng (Provider)</label>
+                      <input type="text" name="provider" value={formData.provider} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="VD: VIỄN ĐÔNG" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Ngày cấp <span className="text-red-500">*</span></label>
+                      <input required type="date" name="issue_date" value={formData.issue_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Ngày hiệu lực <span className="text-red-500">*</span></label>
+                      <input required type="date" name="effective_date" value={formData.effective_date} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  </div>
+                  
+                  <h3 className="font-medium text-slate-900 border-b pb-2 mt-6">Thông tin khách hàng</h3>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Chủ xe / Tên KH <span className="text-red-500">*</span></label>
+                    <input required type="text" name="vehicle_owner" value={formData.vehicle_owner} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Biển số xe</label>
+                      <input type="text" name="license_plate" value={formData.license_plate} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">SĐT Khách hàng</label>
+                      <input type="text" name="customer_phone" value={formData.customer_phone} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="font-medium text-slate-900 border-b pb-2">Thông tin phí & Thanh toán</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Phí TNDS</label>
+                      <input type="number" name="tnds_fee" value={formData.tnds_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Phí LP NNTX</label>
+                      <input type="number" name="nn_fee" value={formData.nn_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                     <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Tổng phí</label>
+                      <input type="number" readOnly value={formData.total_fee} className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm font-semibold text-slate-900" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Trạng thái thanh toán <span className="text-red-500">*</span></label>
+                      <select name="payment_status" value={formData.payment_status} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+                        <option value="UNPAID">Chưa thanh toán</option>
+                        <option value="PARTIAL">Thanh toán 1 phần</option>
+                        <option value="PAID">Đã thanh toán</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                     <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Số tiền COD</label>
+                      <input type="number" name="cod_amount" value={formData.cod_amount} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                     <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Phí Vận chuyển</label>
+                      <input type="number" name="shipping_fee" value={formData.shipping_fee} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Hoa hồng (%)</label>
+                      <input type="number" name="commission_rate" value={formData.commission_rate} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="%" />
+                    </div>
+                  </div>
+
+                  <h3 className="font-medium text-slate-900 border-b pb-2 mt-6">Phân công & Ghi chú</h3>
+                  {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
+                    <div className="grid grid-cols-2 gap-4">
+                      {(currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || currentUser.role === 'STAFF' || currentUser.role === 'CTV') && (
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Nhân viên (Người cấp)</label>
+                          <select name="staff_id" value={formData.staff_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+                            <option value="">Chọn nhân viên...</option>
+                            {users.filter((u: any) => {
+                              if (currentUser.role === 'STAFF') {
+                                return u.role === 'STAFF';
+                              }
+                              if (currentUser.role === 'CTV') {
+                                return u.role === 'CTV';
+                              }
+                              return u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV';
+                            }).map((u: any) => (
+                              <option key={u.id} value={u.id}>{u.fullname}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Đại lý</label>
+                        <select name="agency_id" value={formData.agency_id} onChange={handleChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+                          <option value="">Không có</option>
+                          {users.filter((u: any) => u.role === 'AGENCY' && (currentUser.role === 'MASTER' || currentUser.role === 'ACCOUNTANT' || u.parent_id === currentUser.id)).map((u: any) => (
+                            <option key={u.id} value={u.id}>{u.fullname}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Ghi chú / Mã Giao dịch</label>
+                    <textarea name="notes" value={formData.notes} onChange={handleChange} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"></textarea>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           
           <div className="flex justify-end gap-3 pt-6 border-t mt-8">
@@ -1934,6 +2553,10 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
   const [orders, setOrders] = useState<any[]>(previewData.newOrders);
   const [statementMonth, setStatementMonth] = useState("");
 
+  const isVcx = useMemo(() => {
+    return orders.some(o => o.insurance_type === 'VCX_OTO');
+  }, [orders]);
+
   const monthOptions = useMemo(() => {
     const options = [];
     const now = new Date();
@@ -2014,20 +2637,106 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
             <div className="overflow-x-auto max-h-[400px]">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b text-slate-600 font-bold sticky top-0 bg-slate-50 z-10 text-center">
-                    <th className="px-2 py-2">Seri</th>
-                    <th className="px-2 py-2">Khách hàng</th>
-                    <th className="px-2 py-2">Biển số</th>
-                    <th className="px-2 py-2">Hãng</th>
-                    <th className="px-2 py-2 text-right">Tổng phí</th>
-                    <th className="px-2 py-2">Ngày hiệu lực</th>
-                    <th className="px-2 py-2">Nhân viên (Người cấp)</th>
-                    <th className="px-2 py-2">Đại lý</th>
-                  </tr>
+                  {isVcx ? (
+                    <tr className="bg-slate-50 border-b text-slate-600 font-bold sticky top-0 bg-slate-50 z-10 text-center">
+                      <th className="px-2 py-2">Seri</th>
+                      <th className="px-2 py-2">Khách hàng</th>
+                      <th className="px-2 py-2">Biển số</th>
+                      <th className="px-2 py-2">GTX / ĐKBS</th>
+                      <th className="px-2 py-2">Hiệu xe / Năm SX</th>
+                      <th className="px-2 py-2">MĐSD</th>
+                      <th className="px-2 py-2">Vay bank</th>
+                      <th className="px-2 py-2">Hình xe</th>
+                      <th className="px-2 py-2 text-right">Phí HĐ</th>
+                      <th className="px-2 py-2 text-right">Nộp về</th>
+                      <th className="px-2 py-2 text-right">Thanh toán</th>
+                      <th className="px-2 py-2 text-right">Dư</th>
+                      <th className="px-2 py-2">Người nhận CK</th>
+                      <th className="px-2 py-2">Nhân viên (Người cấp)</th>
+                      <th className="px-2 py-2">Đại lý</th>
+                    </tr>
+                  ) : (
+                    <tr className="bg-slate-50 border-b text-slate-600 font-bold sticky top-0 bg-slate-50 z-10 text-center">
+                      <th className="px-2 py-2">Seri</th>
+                      <th className="px-2 py-2">Khách hàng</th>
+                      <th className="px-2 py-2">Biển số</th>
+                      <th className="px-2 py-2">Hãng</th>
+                      <th className="px-2 py-2 text-right">Tổng phí</th>
+                      <th className="px-2 py-2">Ngày hiệu lực</th>
+                      <th className="px-2 py-2">Nhân viên (Người cấp)</th>
+                      <th className="px-2 py-2">Đại lý</th>
+                    </tr>
+                  )}
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {orders.map((o, index) => {
-                    const staffValid = users.some(u => u.id === o.staff_id && (u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER'));
+                    const staffValid = users.some(u => u.id === o.staff_id && (u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV'));
+                    
+                    if (isVcx) {
+                      const nopve = o.vcx_nop_ve || 0;
+                      const payment = o.vcx_payment || 0;
+                      const du = payment - nopve;
+                      const hasPayment = (o.vcx_payment !== undefined && o.vcx_payment !== null && o.vcx_payment > 0);
+
+                      return (
+                        <tr key={index} className={`hover:bg-slate-50 transition-colors ${!staffValid ? 'bg-red-50 text-red-950 border-red-200' : 'bg-white'}`}>
+                          <td className="px-2 py-1.5 font-medium text-slate-900">{o.serial_number}</td>
+                          <td className="px-2 py-1.5">{o.vehicle_owner}</td>
+                          <td className="px-2 py-1.5">{o.license_plate || '-'}</td>
+                          <td className="px-2 py-1.5">{o.gtx_dkbs || '-'}</td>
+                          <td className="px-2 py-1.5">{o.hieu_xe_nam_sx || '-'}</td>
+                          <td className="px-2 py-1.5">{o.mdsd || '-'}</td>
+                          <td className="px-2 py-1.5">{o.vay_bank || '-'}</td>
+                          <td className="px-2 py-1.5">{o.hinh_xe || '-'}</td>
+                          <td className="px-2 py-1.5 text-right font-medium">{new Intl.NumberFormat('vi-VN').format(o.total_fee)} ₫</td>
+                          <td className="px-2 py-1.5 text-right font-medium">{new Intl.NumberFormat('vi-VN').format(nopve)} ₫</td>
+                          <td className="px-2 py-1.5 text-right font-medium">
+                            {hasPayment ? (
+                              <span>{new Intl.NumberFormat('vi-VN').format(payment)} ₫</span>
+                            ) : (
+                              <span className="text-red-600 font-bold">Cần nộp phí BH</span>
+                            )}
+                          </td>
+                          <td className={`px-2 py-1.5 text-right font-bold ${du < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                            {new Intl.NumberFormat('vi-VN').format(du)} ₫
+                          </td>
+                          <td className="px-2 py-1.5">{o.vcx_payment_recipient || '-'}</td>
+                          <td className="px-2 py-1.5">
+                            <div className="flex flex-col gap-1">
+                              <select 
+                                value={users.some(u => u.id === o.staff_id) ? o.staff_id : ''}
+                                onChange={(e) => handleSelectStaff(index, e.target.value)}
+                                className={`border rounded px-2 py-1 text-xs outline-none bg-white text-slate-700 ${!staffValid ? 'border-red-400 bg-red-100 text-red-700 font-semibold' : 'border-slate-300'}`}
+                              >
+                                <option value="">Chọn nhân viên...</option>
+                                {users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV').map(u => (
+                                  <option key={u.id} value={u.id}>{u.fullname}</option>
+                                ))}
+                              </select>
+                              {!staffValid && o.staff_id && (
+                                <span className="text-[10px] text-red-600 font-semibold leading-none">Excel: "{o.staff_id}"</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <select 
+                              value={users.some(u => u.id === o.agency_id) ? o.agency_id : (o.agency_id || '')}
+                              onChange={(e) => handleSelectAgency(index, e.target.value)}
+                              className="border border-slate-300 rounded px-2 py-1 text-xs outline-none bg-white text-slate-700"
+                            >
+                              <option value="">Không có đại lý</option>
+                              {users.filter(u => u.role === 'AGENCY').map(u => (
+                                <option key={u.id} value={u.id}>{u.fullname}</option>
+                              ))}
+                              {o.agency_id && !users.some(u => u.id === o.agency_id) && (
+                                <option value={o.agency_id}>{o.agency_id} (Mới)</option>
+                              )}
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    }
+
                     return (
                       <tr key={index} className={`hover:bg-slate-50 transition-colors ${!staffValid ? 'bg-red-50 text-red-950 border-red-200' : 'bg-white'}`}>
                         <td className="px-2 py-1.5 font-medium text-slate-900">{o.serial_number}</td>
@@ -2044,7 +2753,7 @@ function ImportPreviewModal({ previewData, onClose, onConfirm, users }: { previe
                               className={`border rounded px-2 py-1 text-xs outline-none bg-white text-slate-700 ${!staffValid ? 'border-red-400 bg-red-100 text-red-700 font-semibold' : 'border-slate-300'}`}
                             >
                               <option value="">Chọn nhân viên...</option>
-                              {users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER').map(u => (
+                              {users.filter(u => u.role === 'STAFF' || u.role === 'ACCOUNTANT' || u.role === 'MASTER' || u.role === 'CTV').map(u => (
                                 <option key={u.id} value={u.id}>{u.fullname}</option>
                               ))}
                             </select>

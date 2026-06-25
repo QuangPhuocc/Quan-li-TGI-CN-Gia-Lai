@@ -59,6 +59,15 @@ export interface InsuranceOrder {
   updated_by?: string; // Người cập nhật cuối (ID hoặc tên)
   created_at: string;
   updated_at: string;
+  // VCX specific fields
+  gtx_dkbs?: string;
+  hieu_xe_nam_sx?: string;
+  mdsd?: string;
+  vay_bank?: string;
+  hinh_xe?: string;
+  vcx_nop_ve?: number;
+  vcx_payment?: number;
+  vcx_payment_recipient?: string;
 }
 
 export interface ChangeLog {
